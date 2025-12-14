@@ -13,7 +13,7 @@ const io = new Server(server, {
     }
 });
 
-// Store room data: roomId -> { strokes: [] }
+// Store room data: roomId -> { strokes: [], users: {} }
 const rooms = {};
 
 const PORT = process.env.PORT || 3000;
@@ -21,36 +21,51 @@ const PORT = process.env.PORT || 3000;
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    socket.on('join-room', (roomId) => {
+    // Track which room this socket is in
+    let currentRoom = null;
+    let currentUserId = null;
+
+    socket.on('join-room', (roomId, userId) => {
         socket.join(roomId);
+        currentRoom = roomId;
+        currentUserId = userId || socket.id;
 
         // Initialize room if not exists
         if (!rooms[roomId]) {
-            rooms[roomId] = { strokes: [] };
+            rooms[roomId] = { strokes: [], users: {}, messages: [] };
         }
 
+        // Add user to room
+        rooms[roomId].users[socket.id] = currentUserId;
+
         const roomSize = io.sockets.adapter.rooms.get(roomId)?.size || 0;
-        console.log(`User ${socket.id} joined room ${roomId}. Total users: ${roomSize}`);
+        console.log(`User ${currentUserId} joined room ${roomId}. Total users: ${roomSize}`);
 
         // Send existing history to the new joiner
-        console.log(`Sending history to ${socket.id} in room ${roomId}: ${rooms[roomId].strokes.length} strokes`);
         socket.emit('load-canvas', rooms[roomId].strokes);
 
-        // Notify others in room
-        socket.to(roomId).emit('user-joined', { userId: socket.id });
+        // Send chat history
+        socket.emit('load-messages', rooms[roomId].messages || []);
+
+        // Send list of current users
+        const userList = Object.values(rooms[roomId].users);
+        socket.emit('room-users', userList);
+
+        // Notify others in room with the userId (not socket.id)
+        socket.to(roomId).emit('user-joined', { userId: currentUserId });
     });
 
     // Explicit request for canvas state
     socket.on('get-canvas', (roomId) => {
         if (rooms[roomId]) {
-            console.log(`Sending requested history to ${socket.id} for room ${roomId}`);
             socket.emit('load-canvas', rooms[roomId].strokes);
         }
     });
 
     // Client sends a full path or segment
-    socket.on('draw-stroke', ({ roomId, path, color, strokeWidth }) => {
-        const strokeData = { path, color, strokeWidth, userId: socket.id };
+    socket.on('draw-stroke', ({ roomId, path, color, strokeWidth, isEraser }) => {
+        const userId = rooms[roomId]?.users[socket.id] || socket.id;
+        const strokeData = { path, color, strokeWidth, userId, isEraser: isEraser || false };
 
         // Save to history
         if (rooms[roomId]) {
@@ -62,14 +77,15 @@ io.on('connection', (socket) => {
     });
 
     // Handle live drawing moves
-    socket.on('drawing-move', ({ roomId, path, color, strokeWidth }) => {
-        socket.to(roomId).emit('drawing-move', { path, color, strokeWidth, userId: socket.id });
+    socket.on('drawing-move', ({ roomId, path, color, strokeWidth, isEraser }) => {
+        const userId = rooms[roomId]?.users[socket.id] || socket.id;
+        socket.to(roomId).emit('drawing-move', { path, color, strokeWidth, userId, isEraser: isEraser || false });
     });
 
     // Broadcast undo
     socket.on('undo-stroke', ({ roomId }) => {
         if (rooms[roomId] && rooms[roomId].strokes.length > 0) {
-            rooms[roomId].strokes.pop(); // Remove last stroke
+            rooms[roomId].strokes.pop();
         }
         socket.to(roomId).emit('undo-stroke');
     });
@@ -84,12 +100,44 @@ io.on('connection', (socket) => {
 
     // Chat messages
     socket.on('send-message', ({ roomId, message, userId, timestamp }) => {
-        socket.to(roomId).emit('receive-message', { message, userId, timestamp });
+        const msgData = { message, userId, timestamp };
+        // Store message in room history
+        if (rooms[roomId]) {
+            rooms[roomId].messages = rooms[roomId].messages || [];
+            rooms[roomId].messages.push(msgData);
+            // Keep last 100 messages only
+            if (rooms[roomId].messages.length > 100) {
+                rooms[roomId].messages = rooms[roomId].messages.slice(-100);
+            }
+        }
+        socket.to(roomId).emit('receive-message', msgData);
+    });
+
+    // Check if room exists
+    socket.on('check-room', (roomId, callback) => {
+        const exists = rooms[roomId] !== undefined &&
+            (io.sockets.adapter.rooms.get(roomId)?.size || 0) > 0;
+        callback(exists);
     });
 
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
-        // Could notify room about disconnection if needed
+
+        // Notify room about disconnection
+        if (currentRoom && rooms[currentRoom]) {
+            const userId = rooms[currentRoom].users[socket.id];
+            delete rooms[currentRoom].users[socket.id];
+
+            if (userId) {
+                socket.to(currentRoom).emit('user-left', { userId });
+            }
+
+            // Clean up empty rooms
+            if (Object.keys(rooms[currentRoom].users).length === 0) {
+                delete rooms[currentRoom];
+                console.log(`Room ${currentRoom} deleted (empty)`);
+            }
+        }
     });
 });
 

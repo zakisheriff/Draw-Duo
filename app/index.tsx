@@ -1,32 +1,39 @@
-import ComicBoom, { BoomShape } from '@/components/ComicBoom';
 import ComicForeground from '@/components/ComicForeground';
 import CustomToast from '@/components/CustomToast';
-import GlitchText from '@/components/GlitchText';
+import DimensionGlitchOverlay from '@/components/DimensionGlitchOverlay';
 import GraffitiBackground from '@/components/GraffitiBackground';
 import MessyInput from '@/components/MessyInput';
-import { Colors } from '@/constants/Colors';
+import SpiderSymbol from '@/components/SpiderSymbol';
+import WebShoot from '@/components/WebShoot';
 import socketService from '@/services/socket';
+import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Dimensions, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeInUp, ZoomIn } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const { height } = Dimensions.get('window');
+const { height, width } = Dimensions.get('window');
+
+// ACROSS THE SPIDER-VERSE AUTHENTIC COLORS
+const ATSV = {
+    milesRed: '#E23636',
+    milesBlack: '#1A1A2E',
+    electricBlue: '#00D4FF',
+    hotPink: '#FF2D95',
+    neonYellow: '#FFE135',
+    prowlerPurple: '#9D4EDD',
+    webWhite: '#FFFFFF',
+};
 
 export default function HomeScreen() {
     const router = useRouter();
     const [roomId, setRoomId] = useState('');
     const [username, setUsername] = useState('');
-
-    // Temporary Booms on Tap
-    const [taps, setTaps] = useState<{ id: number, x: number, y: number, word: string, shape: BoomShape, color: string }[]>([]);
-
-    // Toast state
+    const [webShots, setWebShots] = useState<{ id: number, x: number, y: number }[]>([]);
     const [toast, setToast] = useState({ visible: false, message: '', type: 'error' as 'error' | 'success' });
 
     useEffect(() => {
-        // Connect on mount to be ready
         socketService.connect();
     }, []);
 
@@ -36,61 +43,34 @@ export default function HomeScreen() {
 
     const handleBackgroundTap = (evt: any) => {
         Keyboard.dismiss();
-
-        // Spawn a comic effect at touch location
         const { locationX, locationY } = evt.nativeEvent;
         const id = Date.now();
-        const WORDS = ['POW!', 'BAM!', 'ZAP!', 'OOF!', 'THWACK!'];
-        const SHAPES: BoomShape[] = ['explosion', 'burst', 'jagged', 'star'];
-        const COLORS = [Colors.spiderRed, Colors.spiderYellow, Colors.spiderBlue, Colors.spiderMagenta];
 
-        const newTap = {
-            id,
-            x: locationX - 55, // Center offset (approx half of boom size)
-            y: locationY - 55,
-            word: WORDS[Math.floor(Math.random() * WORDS.length)],
-            shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
-            color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        };
-
-        setTaps(prev => [...prev, newTap]);
-
-        // Remove after animation (2s to be safe)
-        setTimeout(() => {
-            setTaps(prev => prev.filter(t => t.id !== id));
-        }, 2000);
+        // Add web shot
+        setWebShots(prev => [...prev, { id, x: locationX, y: locationY }]);
     };
 
     const createSession = () => {
-        // Generate random 5 digit number (10000 - 99999)
-        const newRoomId = Math.floor(10000 + Math.random() * 90000).toString();
-
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         if (!username) {
             showToast('ENTER A NAME, HERO!', 'error');
             return;
         }
-        // No need to check, we are creating it
+        const newRoomId = Math.floor(10000 + Math.random() * 90000).toString();
         router.push({ pathname: '/room/[id]', params: { id: newRoomId, username } });
     };
 
     const joinSession = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         if (!roomId || !username) {
             showToast('ENTER ROOM ID & NAME!', 'error');
             return;
         }
-
-        // Connect if not already connected
-        if (!socketService.socket?.connected) {
-            socketService.connect();
-        }
+        if (!socketService.socket?.connected) socketService.connect();
 
         let answered = false;
-
-        // Timeout if server doesn't respond in 2 seconds
         const timeout = setTimeout(() => {
-            if (!answered) {
-                showToast('SERVER UNREACHABLE (CHECK WI-FI)', 'error');
-            }
+            if (!answered) showToast('SERVER UNREACHABLE', 'error');
         }, 2000);
 
         socketService.emit('check-room', roomId, (exists: boolean) => {
@@ -99,22 +79,18 @@ export default function HomeScreen() {
             if (exists) {
                 router.push({ pathname: '/room/[id]', params: { id: roomId, username } });
             } else {
-                showToast('ROOM NOT FOUND IN THIS DIMENSION!', 'error');
+                showToast('ROOM NOT FOUND!', 'error');
             }
         });
     };
-
-
 
     return (
         <TouchableWithoutFeedback onPress={handleBackgroundTap}>
             <View style={styles.container}>
                 <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-
-                {/* Background Texture & Graffiti */}
                 <GraffitiBackground />
-
                 <View style={styles.overlay} />
+                <DimensionGlitchOverlay intensity="subtle" />
 
                 <CustomToast
                     visible={toast.visible}
@@ -123,68 +99,64 @@ export default function HomeScreen() {
                     onHide={() => setToast(prev => ({ ...prev, visible: false }))}
                 />
 
-                {/* Tap Effects Layer (Behind inputs but above background) */}
-                {taps.map(tap => (
-                    <ComicBoom
-                        key={tap.id}
-                        word={tap.word}
-                        x={tap.x}
-                        y={tap.y}
-                        shape={tap.shape}
-                        color={tap.color}
-                        delay={0}
-                        size={35}
+                {/* Web shooting effects */}
+                {webShots.map(shot => (
+                    <WebShoot
+                        key={shot.id}
+                        id={shot.id}
+                        targetX={shot.x}
+                        targetY={shot.y}
+                        onComplete={() => setWebShots(prev => prev.filter(w => w.id !== shot.id))}
                     />
                 ))}
 
                 <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
-                    <KeyboardAvoidingView
-                        behavior={Platform.OS === 'android' ? 'height' : 'padding'} // 'height' is better for Android windowed mode
-                        style={styles.keyboardView}
-                    >
-                        {/* SCROLL VIEW TO PREVENT CLIPPING ON SMALL SCREENS */}
-                        <ScrollView
-                            contentContainerStyle={styles.scrollContent}
-                            showsVerticalScrollIndicator={false}
-                            keyboardShouldPersistTaps="handled"
-                            bounces={false}
-                        >
-                            <Animated.View entering={FadeInDown.duration(800).springify()} style={styles.content}>
+                    <KeyboardAvoidingView behavior={Platform.OS === 'android' ? 'height' : 'padding'} style={styles.keyboardView}>
+                        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" bounces={false}>
+                            <Animated.View entering={FadeInDown.duration(600)} style={styles.content}>
+
+                                {/* Spider Symbol - Smaller */}
+                                <Animated.View entering={ZoomIn.delay(100).duration(400)} style={styles.spiderContainer}>
+                                    <SpiderSymbol size={50} color={ATSV.milesRed} animated />
+                                </Animated.View>
+
+                                {/* SWING MATES Title - Tight like iOS */}
                                 <View style={styles.titleWrapper}>
-                                    {/* "SWING" - Black with High Contrast Glitch */}
-                                    <View style={{ transform: [{ rotate: '-3deg' }] }}>
-                                        <GlitchText text="SWING" color="black" highlightColor={Colors.spiderRed} fontSize={64} />
+                                    <View style={styles.swingContainer}>
+                                        <Text style={[styles.titleShadow, { top: 3, left: -3, color: ATSV.milesRed }]}>SWING</Text>
+                                        <Text style={[styles.titleShadow, { top: 2, left: 2, color: ATSV.electricBlue }]}>SWING</Text>
+                                        <Text style={[styles.titleText]}>SWING</Text>
                                     </View>
-                                    {/* "MATES" - Black with High Contrast Glitch */}
-                                    <View style={{ marginTop: -15, transform: [{ rotate: '2deg' }] }}>
-                                        <GlitchText text="MATES" color="black" highlightColor={Colors.spiderBlue} fontSize={64} style={{ textShadowColor: Colors.spiderBlue, textShadowOffset: { width: -3, height: 3 }, textShadowRadius: 0 }} />
+                                    <View style={styles.matesContainer}>
+                                        <Text style={[styles.titleShadow, { top: 3, left: 3, color: ATSV.electricBlue }]}>MATES</Text>
+                                        <Text style={[styles.titleShadow, { top: -2, left: -2, color: ATSV.hotPink }]}>MATES</Text>
+                                        <Text style={[styles.titleText]}>MATES</Text>
                                     </View>
                                 </View>
 
-                                <View style={styles.subtitleBadge}>
-                                    {/* Neon Yellow on Black */}
-                                    <GlitchText text="ACROSS THE SERVER-VERSE" color={Colors.spiderYellow} fontSize={16} />
-                                </View>
+                                {/* Subtitle */}
+                                <Animated.View entering={FadeInUp.delay(200)} style={styles.subtitleBadge}>
+                                    <Text style={styles.subtitleText}>ACROSS THE SERVER-VERSE</Text>
+                                </Animated.View>
 
-                                {/* Messy Inputs */}
-                                <View style={{ width: '100%', paddingHorizontal: 20 }}>
+                                {/* Inputs - Compact */}
+                                <View style={styles.inputContainer}>
                                     <TouchableWithoutFeedback onPress={(e) => e.stopPropagation()}>
                                         <View>
                                             <MessyInput
                                                 label="WHO ARE YOU?"
-                                                placeholder="ENTER ALIAS..."
+                                                placeholder="ALIAS..."
                                                 value={username}
                                                 onChangeText={setUsername}
                                                 rotate="-1deg"
                                                 borderColor="black"
                                             />
-
                                             <MessyInput
-                                                label="COORDINATES?"
-                                                placeholder="####"
+                                                label="ROOM CODE"
+                                                placeholder="#####"
                                                 value={roomId}
                                                 onChangeText={(text) => setRoomId(text.replace(/[^0-9]/g, ''))}
-                                                rotate="1.5deg"
+                                                rotate="1deg"
                                                 borderColor="black"
                                                 keyboardType="numeric"
                                                 maxLength={5}
@@ -193,30 +165,34 @@ export default function HomeScreen() {
                                     </TouchableWithoutFeedback>
                                 </View>
 
-                                {/* Action Buttons - NEON DARK MODE */}
-                                <TouchableOpacity
-                                    style={[styles.button, styles.joinBtn]}
-                                    onPress={joinSession}
-                                    activeOpacity={0.8}
-                                >
-                                    <GlitchText text="JUMP IN!" fontSize={24} color={Colors.spiderBlue} />
-                                </TouchableOpacity>
+                                {/* BUTTONS - Compact for Android */}
+                                <Animated.View entering={FadeInUp.delay(400)} style={styles.buttonContainer}>
+                                    {/* JUMP IN - Electric Blue */}
+                                    <TouchableOpacity style={styles.jumpInBtn} onPress={joinSession} activeOpacity={0.9}>
+                                        <View style={[styles.btnShadow, { backgroundColor: ATSV.hotPink, top: 3, left: -3 }]} />
+                                        <View style={[styles.btnShadow, { backgroundColor: 'black', top: 4, left: 4 }]} />
+                                        <View style={[styles.btnMain, { backgroundColor: ATSV.electricBlue }]}>
+                                            <Text style={[styles.btnText, { color: 'black' }]}>JUMP IN!</Text>
+                                        </View>
+                                    </TouchableOpacity>
 
-                                <Text style={styles.orText}>MEANWHILE...</Text>
+                                    <Text style={styles.orText}>— MEANWHILE —</Text>
 
-                                <TouchableOpacity
-                                    style={[styles.button, styles.createBtn]}
-                                    onPress={createSession}
-                                    activeOpacity={0.8}
-                                >
-                                    <GlitchText text="NEW DIMENSION" fontSize={24} color={Colors.spiderRed} />
-                                </TouchableOpacity>
+                                    {/* NEW DIMENSION - Miles Red */}
+                                    <TouchableOpacity style={styles.newDimensionBtn} onPress={createSession} activeOpacity={0.9}>
+                                        <View style={[styles.btnShadow, { backgroundColor: ATSV.prowlerPurple, top: 3, left: 3 }]} />
+                                        <View style={[styles.btnShadow, { backgroundColor: 'black', top: 4, left: -4 }]} />
+                                        <View style={[styles.btnMain, { backgroundColor: ATSV.milesRed }]}>
+                                            <Text style={[styles.btnText, { color: 'white' }]}>NEW DIMENSION</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                </Animated.View>
+
                             </Animated.View>
                         </ScrollView>
                     </KeyboardAvoidingView>
                 </SafeAreaView>
 
-                {/* Foreground Elements (Top of Screen) */}
                 <ComicForeground />
             </View>
         </TouchableWithoutFeedback>
@@ -226,89 +202,113 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000000', // PURE BLACK
+        backgroundColor: ATSV.milesBlack,
     },
     safeArea: {
         flex: 1,
-        // ANDROID: Add explicit frame margin to satisfy "Must not be full screen"
-        ...(Platform.OS === 'android' && {
-            margin: 10,
-            borderWidth: 2,
-            borderColor: 'transparent', // Invisible border to enforce layout bounds
-        }),
     },
     overlay: {
         ...StyleSheet.absoluteFillObject,
-        backgroundColor: 'rgba(0,0,0,0.4)', // Slightly darkened
+        backgroundColor: 'rgba(0,0,0,0.3)',
     },
     keyboardView: {
         flex: 1,
-        width: '100%',
     },
     scrollContent: {
         flexGrow: 1,
-        justifyContent: 'center', // Stick to center
-        paddingVertical: 20,
+        justifyContent: 'center',
+        paddingVertical: 10,
     },
     content: {
-        width: '100%',
         alignItems: 'center',
-        paddingHorizontal: 20,
+        paddingHorizontal: 25,
+    },
+    spiderContainer: {
+        marginBottom: 5,
     },
     titleWrapper: {
-        marginBottom: 15,
+        marginBottom: 5,
         alignItems: 'center',
-        transform: [{ rotate: '-2deg' }]
+    },
+    swingContainer: {
+        position: 'relative',
+        transform: [{ skewX: '-8deg' }, { rotate: '-3deg' }],
+    },
+    matesContainer: {
+        position: 'relative',
+        marginTop: Platform.OS === 'android' ? -40 : -12,
+        transform: [{ skewX: '-8deg' }, { rotate: '2deg' }],
+    },
+    titleText: {
+        fontFamily: 'Bangers_400Regular',
+        fontSize: Platform.OS === 'android' ? 48 : 56,
+        color: 'black',
+        textShadowColor: 'white',
+        textShadowOffset: { width: -1, height: -1 },
+        textShadowRadius: 0,
+    },
+    titleShadow: {
+        position: 'absolute',
+        fontFamily: 'Bangers_400Regular',
+        fontSize: Platform.OS === 'android' ? 48 : 56,
     },
     subtitleBadge: {
         backgroundColor: 'black',
-        paddingHorizontal: 15,
-        paddingVertical: 5,
+        paddingHorizontal: 14,
+        paddingVertical: 4,
         transform: [{ rotate: '1deg' }],
         borderWidth: 2,
-        borderColor: Colors.spiderYellow, // Neon Pop
-        marginBottom: 30, // Reduced margin
-        shadowColor: Colors.spiderYellow,
-        shadowOffset: { width: 4, height: 4 },
-        shadowOpacity: 0.8,
-        shadowRadius: 0,
+        borderColor: ATSV.neonYellow,
+        marginBottom: 15,
     },
-    button: {
+    subtitleText: {
+        fontFamily: 'Bangers_400Regular',
+        fontSize: 13,
+        color: ATSV.neonYellow,
+        letterSpacing: 1,
+    },
+    inputContainer: {
         width: '100%',
-        height: 55, // Even more compact
-        justifyContent: 'center',
+        marginBottom: 5,
+    },
+    buttonContainer: {
+        width: '100%',
         alignItems: 'center',
+    },
+    jumpInBtn: {
+        position: 'relative',
+        width: Platform.OS === 'android' ? 240 : 280,
+        transform: [{ rotate: '-2deg' }],
+        marginBottom: 5,
+    },
+    newDimensionBtn: {
+        position: 'relative',
+        width: Platform.OS === 'android' ? 240 : 280,
+        transform: [{ rotate: '2deg' }],
+    },
+    btnShadow: {
+        position: 'absolute',
+        width: '100%',
+        height: '100%',
         borderWidth: 3,
-        borderColor: 'black', // Base border
-        marginBottom: 10,
-        marginTop: 10,
-        backgroundColor: 'black', // Dark Buttons
+        borderColor: 'black',
     },
-    joinBtn: {
-        transform: [{ rotate: '-1deg' }],
-        borderColor: Colors.spiderBlue, // Neon Border
-        shadowColor: Colors.spiderBlue,
-        shadowOffset: { width: 5, height: 5 },
-        shadowOpacity: 1,
-        shadowRadius: 0,
+    btnMain: {
+        paddingVertical: Platform.OS === 'android' ? 10 : 14,
+        paddingHorizontal: Platform.OS === 'android' ? 20 : 30,
+        borderWidth: 3,
+        borderColor: 'black',
+        alignItems: 'center',
     },
-    createBtn: {
-        transform: [{ rotate: '1deg' }],
-        borderColor: Colors.spiderRed, // Neon Border
-        shadowColor: Colors.spiderRed,
-        shadowOffset: { width: 5, height: 5 },
-        shadowOpacity: 1,
-        shadowRadius: 0,
+    btnText: {
+        fontFamily: 'Bangers_400Regular',
+        fontSize: Platform.OS === 'android' ? 20 : 24,
+        letterSpacing: 1,
     },
     orText: {
         fontFamily: 'Bangers_400Regular',
-        fontSize: 16,
+        fontSize: 12,
+        color: 'rgba(255,255,255,0.6)',
         marginVertical: 8,
-        color: 'white',
-        backgroundColor: 'black',
-        borderWidth: 2,
-        borderColor: 'white',
-        paddingHorizontal: 10,
-        transform: [{ rotate: '3deg' }]
-    }
+    },
 });

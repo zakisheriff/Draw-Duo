@@ -1,7 +1,11 @@
+import * as Haptics from 'expo-haptics';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Dimensions, FlatList, Keyboard, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { Colors } from '../constants/Colors';
 import socketService from '../services/socket';
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface Message {
     id: string;
@@ -21,8 +25,16 @@ export default function ChatOverlay({ roomId, userId }: ChatProps) {
     const flatListRef = useRef<FlatList>(null);
     const [isOpen, setIsOpen] = useState(false);
     const [unreadCount, setUnreadCount] = useState(0);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+    const glitchX = useSharedValue(0);
 
     const isOpenRef = useRef(isOpen);
+    const textRef = useRef(text); // Store text in ref for Android
+
+    // Keep text ref in sync
+    useEffect(() => {
+        textRef.current = text;
+    }, [text]);
 
     useEffect(() => {
         isOpenRef.current = isOpen;
@@ -31,44 +43,117 @@ export default function ChatOverlay({ roomId, userId }: ChatProps) {
         }
     }, [isOpen]);
 
+    // Keyboard listeners
+    useEffect(() => {
+        const showSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            (e) => setKeyboardHeight(e.endCoordinates.height)
+        );
+        const hideSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            () => setKeyboardHeight(0)
+        );
+
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, []);
+
     useEffect(() => {
         const handleMessage = (data: any) => {
             setMessages((prev) => [...prev, { ...data, id: Math.random().toString() }]);
 
             if (!isOpenRef.current) {
                 setUnreadCount(prev => prev + 1);
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             }
 
             setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
         };
 
+        // Load existing messages when joining
+        const handleLoadMessages = (msgs: any[]) => {
+            if (msgs && Array.isArray(msgs)) {
+                const formatted = msgs.map(m => ({ ...m, id: Math.random().toString() }));
+                setMessages(formatted);
+                setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
+            }
+        };
+
         socketService.on('receive-message', handleMessage);
+        socketService.on('load-messages', handleLoadMessages);
 
         return () => {
             socketService.off('receive-message');
+            socketService.off('load-messages');
         };
     }, []);
 
-    const sendMessage = () => {
-        if (!text.trim()) return;
+    const sendMessage = (inputText?: string) => {
+        // Use provided text or fall back to ref/state
+        const messageText = (inputText || textRef.current || text).trim();
+        if (!messageText) return;
+
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+        glitchX.value = withSequence(
+            withTiming(5, { duration: 30 }),
+            withTiming(-3, { duration: 20 }),
+            withTiming(0, { duration: 50 })
+        );
 
         const msgData = {
             roomId,
-            message: text,
+            message: messageText,
             userId,
             timestamp: Date.now(),
         };
 
         socketService.emit('send-message', msgData);
         setMessages((prev) => [...prev, { ...msgData, id: Math.random().toString() }]);
+
+        // Clear text after sending
         setText('');
+        textRef.current = '';
+
         setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
     };
 
+    const handleSubmit = (e: any) => {
+        // Get text directly from native event for Android
+        const nativeText = e?.nativeEvent?.text;
+        sendMessage(nativeText);
+    };
+
+    const handleOpen = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setIsOpen(true);
+    };
+
+    const handleClose = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        Keyboard.dismiss();
+        setIsOpen(false);
+    };
+
+    const animatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: glitchX.value }],
+    }));
+
+    // Calculate chat position based on keyboard
+    const chatBottom = Platform.OS === 'android'
+        ? (keyboardHeight > 0 ? keyboardHeight + 10 : 100)
+        : (keyboardHeight > 0 ? keyboardHeight + 10 : 90);
+
+    const chatHeight = Platform.OS === 'android'
+        ? Math.min(SCREEN_HEIGHT * 0.45, 320)
+        : Math.min(SCREEN_HEIGHT * 0.45, 350);
+
     if (!isOpen) {
         return (
-            <TouchableOpacity style={styles.openButton} onPress={() => setIsOpen(true)}>
-                <Text style={styles.openButtonText}>💬 CHAT</Text>
+            <TouchableOpacity style={styles.openButton} onPress={handleOpen}>
+                <Text style={styles.openButtonText}>💬</Text>
                 {unreadCount > 0 && (
                     <View style={styles.badge}>
                         <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
@@ -79,210 +164,225 @@ export default function ChatOverlay({ roomId, userId }: ChatProps) {
     }
 
     return (
-        <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "padding"}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 20 : 20}
-            style={styles.container}
+        <Animated.View
+            entering={FadeIn.duration(200)}
+            exiting={FadeOut.duration(150)}
+            style={[styles.container, { bottom: chatBottom, height: chatHeight }]}
         >
-            <View style={styles.header}>
-                <Text style={styles.headerTitle}>SQUAD CHAT</Text>
-                <TouchableOpacity onPress={() => setIsOpen(false)}>
-                    <Text style={styles.closeBtn}>X</Text>
-                </TouchableOpacity>
-            </View>
+            <Animated.View style={[styles.panel, animatedStyle]}>
+                {/* Header with close button */}
+                <View style={styles.header}>
+                    <Text style={styles.headerTitle}>SQUAD CHAT</Text>
+                    <TouchableOpacity style={styles.closeBtn} onPress={handleClose}>
+                        <Text style={styles.closeBtnText}>✕</Text>
+                    </TouchableOpacity>
+                </View>
 
-            <FlatList
-                ref={flatListRef}
-                data={messages}
-                keyExtractor={(item) => item.id}
-                renderItem={({ item }) => (
-                    <View style={[
-                        styles.bubble,
-                        item.userId === userId ? styles.myBubble : styles.theirBubble
-                    ]}>
-                        <Text style={styles.sender}>{item.userId.split('-')[0]}</Text>
-                        <Text style={styles.message}>{item.message}</Text>
-                    </View>
-                )}
-                style={styles.list}
-            />
-
-            <View style={styles.inputRow}>
-                <TextInput
-                    style={styles.input}
-                    value={text}
-                    onChangeText={setText}
-                    placeholder="Say something..."
-                    placeholderTextColor="#666"
+                {/* Messages */}
+                <FlatList
+                    ref={flatListRef}
+                    data={messages}
+                    keyExtractor={(item) => item.id}
+                    renderItem={({ item }) => {
+                        const isOwn = item.userId === userId;
+                        return (
+                            <View style={[styles.bubbleContainer, isOwn ? styles.bubbleContainerRight : styles.bubbleContainerLeft]}>
+                                <View style={[styles.bubble, isOwn ? styles.myBubble : styles.theirBubble]}>
+                                    <Text style={styles.sender}>{item.userId.split('-')[0]}</Text>
+                                    <Text style={styles.message}>{item.message}</Text>
+                                </View>
+                            </View>
+                        );
+                    }}
+                    style={styles.list}
+                    contentContainerStyle={styles.listContent}
+                    keyboardShouldPersistTaps="handled"
                 />
-                <TouchableOpacity style={styles.sendBtn} onPress={sendMessage}>
-                    <Text style={styles.sendText}>POW!</Text>
-                </TouchableOpacity>
-            </View>
-        </KeyboardAvoidingView>
+
+                {/* Input row */}
+                <View style={styles.inputRow}>
+                    <TextInput
+                        style={styles.input}
+                        value={text}
+                        onChangeText={(t) => {
+                            setText(t);
+                            textRef.current = t; // Sync ref immediately
+                        }}
+                        placeholder="Message..."
+                        placeholderTextColor="#888"
+                        onSubmitEditing={handleSubmit}
+                        returnKeyType="send"
+                        blurOnSubmit={false}
+                    />
+                    <TouchableOpacity style={styles.sendBtn} onPress={() => sendMessage()}>
+                        <Text style={styles.sendText}>➤</Text>
+                    </TouchableOpacity>
+                </View>
+            </Animated.View>
+        </Animated.View>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
         position: 'absolute',
-        bottom: Platform.OS === 'android' ? 140 : 120,
-        right: 15,
-        width: 320,
-        height: 450,
-        backgroundColor: 'white',
-        borderWidth: 4,
-        borderColor: 'black',
-        // No rounded corners - raw comic panel
-        borderRadius: 2,
+        right: 10,
+        left: 10,
         zIndex: 3000,
-        shadowColor: Colors.spiderViolet,
-        shadowOffset: { width: 8, height: 8 },
+    },
+    panel: {
+        flex: 1,
+        backgroundColor: '#FFFEF5',
+        borderWidth: 3,
+        borderColor: 'black',
+        borderRadius: 4,
+        shadowColor: Colors.spiderBlue,
+        shadowOffset: { width: 4, height: 4 },
         shadowOpacity: 1,
         shadowRadius: 0,
         elevation: 30,
         overflow: 'hidden',
-        transform: [{ rotate: '1deg' }], // Slight chaos
     },
     openButton: {
         position: 'absolute',
-        bottom: 150,
-        right: 20,
+        bottom: Platform.OS === 'android' ? 105 : 95,
+        right: 15,
         backgroundColor: Colors.spiderRed,
-        padding: 15,
-        paddingHorizontal: 25,
-        borderWidth: 3,
-        borderColor: 'black',
-        elevation: 30,
-        zIndex: 3000,
-        transform: [{ rotate: '-3deg' }],
-        shadowColor: 'black',
-        shadowOffset: { width: 4, height: 4 },
-        shadowOpacity: 1,
-        shadowRadius: 0,
-    },
-    openButtonText: {
-        fontFamily: 'Bangers_400Regular',
-        color: 'white',
-        fontSize: 18,
-        letterSpacing: 1,
-    },
-    badge: {
-        position: 'absolute',
-        top: -10,
-        right: -10,
-        backgroundColor: Colors.spiderYellow,
-        width: 25,
-        height: 25,
+        width: 48,
+        height: 48,
+        borderRadius: 24,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
-        borderColor: 'black',
-        transform: [{ rotate: '15deg' }],
-    },
-    badgeText: {
-        color: 'black',
-        fontSize: 12,
-        fontFamily: 'Inter_700Bold', // Better readability for numbers
-    },
-    header: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        padding: 12,
-        backgroundColor: Colors.spiderBlue,
-        borderBottomWidth: 4,
-        borderBottomColor: 'black',
-    },
-    headerTitle: {
-        fontFamily: 'Bangers_400Regular',
-        fontSize: 24,
-        color: 'black', // Contrast
-        textShadowColor: 'white',
-        textShadowOffset: { width: 1, height: 1 },
-        textShadowRadius: 0,
-    },
-    closeBtn: {
-        fontFamily: 'Inter_700Bold',
-        fontSize: 22,
-        color: 'black',
-    },
-    list: {
-        flex: 1,
-        padding: 15,
-        backgroundColor: '#FAFAFA',
-        // Add halftone texture pattern via ImageBackground if possible, 
-        // for now solid
-    },
-    bubble: {
-        padding: 12,
-        marginBottom: 12,
-        maxWidth: '85%',
         borderWidth: 3,
         borderColor: 'black',
+        elevation: 20,
+        zIndex: 3000,
         shadowColor: 'black',
         shadowOffset: { width: 3, height: 3 },
         shadowOpacity: 1,
         shadowRadius: 0,
     },
-    myBubble: {
-        alignSelf: 'flex-end',
-        backgroundColor: Colors.spiderRed,
-        borderBottomRightRadius: 0,
-        transform: [{ rotate: '-1deg' }],
+    openButtonText: {
+        fontSize: 20,
     },
-    theirBubble: {
-        alignSelf: 'flex-start',
+    badge: {
+        position: 'absolute',
+        top: -6,
+        right: -6,
         backgroundColor: Colors.spiderYellow,
-        borderBottomLeftRadius: 0,
-        transform: [{ rotate: '1deg' }],
-    },
-    sender: {
-        fontSize: 10,
-        fontFamily: 'Inter_700Bold',
-        marginBottom: 4,
-        color: 'black',
-        backgroundColor: 'white',
-        paddingHorizontal: 4,
-        alignSelf: 'flex-start',
-        borderWidth: 1,
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
         borderColor: 'black',
     },
-    message: {
+    badgeText: {
+        color: 'black',
+        fontSize: 10,
+        fontFamily: 'Bangers_400Regular',
+    },
+    header: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 8,
+        backgroundColor: Colors.spiderBlue,
+        borderBottomWidth: 2,
+        borderBottomColor: 'black',
+    },
+    headerTitle: {
+        fontFamily: 'Bangers_400Regular',
         fontSize: 16,
-        fontFamily: 'Inter_700Bold', // Comic boldness
+        color: 'black',
+    },
+    closeBtn: {
+        backgroundColor: 'black',
+        width: 26,
+        height: 26,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderRadius: 4,
+    },
+    closeBtnText: {
+        color: 'white',
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    list: {
+        flex: 1,
+        backgroundColor: '#F8F8F8',
+    },
+    listContent: {
+        padding: 8,
+    },
+    bubbleContainer: {
+        marginBottom: 8,
+        maxWidth: '80%',
+    },
+    bubbleContainerLeft: {
+        alignSelf: 'flex-start',
+    },
+    bubbleContainerRight: {
+        alignSelf: 'flex-end',
+    },
+    bubble: {
+        padding: 8,
+        borderRadius: 4,
+        borderWidth: 2,
+        borderColor: 'black',
+    },
+    myBubble: {
+        backgroundColor: Colors.spiderRed,
+    },
+    theirBubble: {
+        backgroundColor: Colors.spiderYellow,
+    },
+    sender: {
+        fontSize: 9,
+        fontFamily: 'Bangers_400Regular',
+        color: 'black',
+        marginBottom: 2,
+        opacity: 0.7,
+    },
+    message: {
+        fontSize: 13,
         color: 'black',
     },
     inputRow: {
         flexDirection: 'row',
-        padding: 12,
-        borderTopWidth: 4,
+        padding: 6,
+        borderTopWidth: 2,
         borderTopColor: 'black',
-        backgroundColor: Colors.spiderBlack,
+        backgroundColor: '#222',
     },
     input: {
         flex: 1,
-        borderWidth: 3,
+        borderWidth: 2,
         borderColor: 'black',
         backgroundColor: 'white',
-        paddingHorizontal: 15,
-        height: 50,
-        marginRight: 10,
-        fontFamily: 'Inter_700Bold',
-        fontSize: 16,
+        paddingHorizontal: Platform.OS === 'android' ? 12 : 10,
+        paddingVertical: Platform.OS === 'android' ? 6 : 0,
+        height: 36,
+        marginRight: 6,
+        borderRadius: 4,
+        fontSize: 14,
         color: 'black',
+        textAlignVertical: 'center',
     },
     sendBtn: {
         backgroundColor: Colors.spiderGreen,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingHorizontal: 15,
-        borderWidth: 3,
+        width: 36,
+        height: 36,
+        borderWidth: 2,
         borderColor: 'black',
-        transform: [{ rotate: '-2deg' }],
+        borderRadius: 4,
     },
     sendText: {
         color: 'black',
-        fontFamily: 'Bangers_400Regular',
-        fontSize: 18,
-    }
+        fontSize: 16,
+    },
 });

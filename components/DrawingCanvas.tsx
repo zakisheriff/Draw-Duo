@@ -1,15 +1,20 @@
 import { Canvas, Path, Skia, SkPath } from '@shopify/react-native-skia';
+import * as ExpoMediaLibrary from 'expo-media-library';
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { GestureResponderEvent, PanResponder, StyleSheet, View } from 'react-native';
+import { GestureResponderEvent, LayoutChangeEvent, PanResponder, StyleSheet, View } from 'react-native';
 import { Colors } from '../constants/Colors';
 import socketService from '../services/socket';
+
+// Fixed virtual canvas size for cross-device coordinate normalization
+const VIRTUAL_WIDTH = 1000;
+const VIRTUAL_HEIGHT = 1000;
 
 interface Stroke {
     path: SkPath;
     color: string;
     strokeWidth: number;
     userId?: string;
-    id?: string; // Add ID for identifying strokes
+    isEraser?: boolean;
 }
 
 export interface CanvasRef {
@@ -18,6 +23,7 @@ export interface CanvasRef {
     toggleEyedropper: () => void;
     isEyedropperActive: boolean;
     clear: () => void;
+    exportCanvas: () => Promise<string | null>;
 }
 
 interface CanvasProps {
@@ -25,30 +31,79 @@ interface CanvasProps {
     color: string;
     strokeWidth: number;
     userId: string;
+    isEraser?: boolean;
     onColorPicked?: (color: string) => void;
 }
 
-const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strokeWidth, userId, onColorPicked }, ref) => {
+const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strokeWidth, userId, isEraser = false, onColorPicked }, ref) => {
     const [paths, setPaths] = useState<Stroke[]>([]);
     const [redoStack, setRedoStack] = useState<Stroke[]>([]);
     const [currentPathState, setCurrentPathState] = useState<SkPath | null>(null);
     const [isEyedropperActive, setIsEyedropperActive] = useState(false);
+    const [remotePaths, setRemotePaths] = useState<Record<string, { path: SkPath, color: string, strokeWidth: number, isEraser?: boolean }>>({});
 
-    // Live remote paths (others drawing)
-    // Map userId -> Path
-    const [remotePaths, setRemotePaths] = useState<Record<string, { path: SkPath, color: string, strokeWidth: number }>>({});
+    // Canvas dimensions
+    const [canvasSize, setCanvasSize] = useState({ width: 1, height: 1 });
+    const [isCanvasReady, setIsCanvasReady] = useState(false);
 
-    // Refs for tracking closure values
+    // Refs
+    const containerRef = useRef<View>(null);
+    const canvasWrapperRef = useRef<View>(null); // Ref for canvas-only capture
     const currentPath = useRef<SkPath | null>(null);
     const colorRef = useRef(color);
     const strokeWidthRef = useRef(strokeWidth);
     const isEyedropperActiveRef = useRef(isEyedropperActive);
-    const pathsRef = useRef(paths); // Track paths for eyedropper
+    const isEraserRef = useRef(isEraser);
+    const pathsRef = useRef(paths);
+    const canvasSizeRef = useRef(canvasSize);
 
     useEffect(() => { colorRef.current = color; }, [color]);
     useEffect(() => { strokeWidthRef.current = strokeWidth; }, [strokeWidth]);
     useEffect(() => { isEyedropperActiveRef.current = isEyedropperActive; }, [isEyedropperActive]);
+    useEffect(() => { isEraserRef.current = isEraser; }, [isEraser]);
     useEffect(() => { pathsRef.current = paths; }, [paths]);
+    useEffect(() => { canvasSizeRef.current = canvasSize; }, [canvasSize]);
+
+    // Scale SVG path string from normalized to local
+    const scalePathToLocal = (svgPath: string): SkPath | null => {
+        if (!svgPath) return null;
+        const { width, height } = canvasSizeRef.current;
+        if (width <= 1 || height <= 1) {
+            // Canvas not ready, return unscaled
+            return Skia.Path.MakeFromSVGString(svgPath);
+        }
+
+        const scaleX = width / VIRTUAL_WIDTH;
+        const scaleY = height / VIRTUAL_HEIGHT;
+
+        const scaledPath = svgPath.replace(
+            /([ML])\s*([\d.-]+)\s+([\d.-]+)/g,
+            (_, cmd, x, y) => {
+                const scaledX = parseFloat(x) * scaleX;
+                const scaledY = parseFloat(y) * scaleY;
+                return `${cmd} ${scaledX} ${scaledY}`;
+            }
+        );
+
+        return Skia.Path.MakeFromSVGString(scaledPath);
+    };
+
+    // Scale SVG path string from local to normalized
+    const scalePathToNormalized = (localPath: SkPath): string => {
+        const { width, height } = canvasSizeRef.current;
+        const scaleX = VIRTUAL_WIDTH / width;
+        const scaleY = VIRTUAL_HEIGHT / height;
+
+        const svgPath = localPath.toSVGString();
+        return svgPath.replace(
+            /([ML])\s*([\d.-]+)\s+([\d.-]+)/g,
+            (_, cmd, x, y) => {
+                const scaledX = parseFloat(x) * scaleX;
+                const scaledY = parseFloat(y) * scaleY;
+                return `${cmd} ${scaledX.toFixed(2)} ${scaledY.toFixed(2)}`;
+            }
+        );
+    };
 
     useImperativeHandle(ref, () => ({
         undo: () => {
@@ -65,19 +120,63 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                 if (prev.length === 0) return prev;
                 const last = prev[prev.length - 1];
                 setPaths(p => [...p, last]);
-                const pathString = last.path.toSVGString();
+                const normalizedPath = scalePathToNormalized(last.path);
                 socketService.emit('draw-stroke', {
                     roomId,
-                    path: pathString,
+                    path: normalizedPath,
                     color: last.color,
-                    strokeWidth: last.strokeWidth
+                    strokeWidth: last.strokeWidth,
+                    isEraser: last.isEraser || false
                 });
                 return prev.slice(0, -1);
             });
         },
         toggleEyedropper: () => setIsEyedropperActive(p => !p),
         isEyedropperActive,
-        clear: () => setPaths([])
+        clear: () => setPaths([]),
+        exportCanvas: async () => {
+            try {
+                // Capture the view using react-native-view-shot
+                if (canvasWrapperRef.current) {
+                    const { captureRef } = await import('react-native-view-shot');
+                    const uri = await captureRef(canvasWrapperRef, {
+                        format: 'png',
+                        quality: 1,
+                    });
+
+                    // Try to save to MediaLibrary on both platforms
+                    try {
+                        const { status } = await ExpoMediaLibrary.requestPermissionsAsync();
+                        if (status === 'granted') {
+                            const asset = await ExpoMediaLibrary.createAssetAsync(uri);
+                            console.log('Saved to:', asset.uri);
+                            return asset.uri;
+                        } else {
+                            console.log('Permission denied');
+                            const { Alert } = require('react-native');
+                            Alert.alert('Permission Denied', 'Please allow photo access to save drawings.');
+                            return null;
+                        }
+                    } catch (mediaError: any) {
+                        console.log('MediaLibrary error:', mediaError);
+                        // If MediaLibrary fails (Expo Go Android limitation), show message
+                        const { Alert, Platform } = require('react-native');
+                        if (Platform.OS === 'android') {
+                            Alert.alert(
+                                'Expo Go Limitation',
+                                'To save images on Android, you need a development build. The image was captured but cannot be saved in Expo Go.',
+                                [{ text: 'OK' }]
+                            );
+                        }
+                        return null;
+                    }
+                }
+                return null;
+            } catch (error) {
+                console.error('Export failed:', error);
+                return null;
+            }
+        }
     }));
 
     const panResponder = useRef(
@@ -99,7 +198,13 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                     return;
                 }
 
-                const { locationX, locationY } = evt.nativeEvent;
+                let { locationX, locationY } = evt.nativeEvent;
+                const { width, height } = canvasSizeRef.current;
+
+                // Clamp coordinates to canvas bounds
+                locationX = Math.max(0, Math.min(locationX, width));
+                locationY = Math.max(0, Math.min(locationY, height));
+
                 const newPath = Skia.Path.Make();
                 newPath.moveTo(locationX, locationY);
                 currentPath.current = newPath;
@@ -108,21 +213,24 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
             onPanResponderMove: (evt: GestureResponderEvent) => {
                 if (isEyedropperActiveRef.current) return;
 
-                const { locationX, locationY } = evt.nativeEvent;
+                let { locationX, locationY } = evt.nativeEvent;
+                const { width, height } = canvasSizeRef.current;
+
+                // Clamp coordinates to canvas bounds
+                locationX = Math.max(0, Math.min(locationX, width));
+                locationY = Math.max(0, Math.min(locationY, height));
+
                 if (currentPath.current) {
                     currentPath.current.lineTo(locationX, locationY);
-
-                    // Throttle state updates if needed, but for now strict sync
                     setCurrentPathState(currentPath.current.copy());
 
-                    // Emit live drawing part (as SVG string for simplicity)
-                    // We send the FULL path so far, not just the segment, for simpler rendering on peer
-                    const pathString = currentPath.current.toSVGString();
+                    const normalizedPath = scalePathToNormalized(currentPath.current);
                     socketService.emit('drawing-move', {
                         roomId,
-                        path: pathString,
+                        path: normalizedPath,
                         color: colorRef.current,
-                        strokeWidth: strokeWidthRef.current
+                        strokeWidth: strokeWidthRef.current,
+                        isEraser: isEraserRef.current
                     });
                 }
             },
@@ -130,32 +238,30 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                 if (isEyedropperActiveRef.current) return;
 
                 if (currentPath.current) {
-                    const pathString = currentPath.current.toSVGString();
+                    const normalizedPath = scalePathToNormalized(currentPath.current);
                     const currentColor = colorRef.current;
                     const currentStrokeWidth = strokeWidthRef.current;
+                    const currentIsEraser = isEraserRef.current;
 
-                    const strokeData = {
+                    const strokeData: Stroke = {
                         path: currentPath.current.copy(),
                         color: currentColor,
                         strokeWidth: currentStrokeWidth,
-                        userId
+                        userId,
+                        isEraser: currentIsEraser
                     };
 
                     setPaths(prev => [...prev, strokeData]);
                     setRedoStack([]);
 
-                    // Finalize stroke
                     socketService.emit('draw-stroke', {
                         roomId,
-                        path: pathString,
+                        path: normalizedPath,
                         color: currentColor,
-                        strokeWidth: currentStrokeWidth
+                        strokeWidth: currentStrokeWidth,
+                        isEraser: currentIsEraser
                     });
 
-                    // Send empty move to clear ghost on peers? 
-                    // Or let the final draw-stroke replace it. 
-                    // To be safe, maybe we don't strictly need to clear, 
-                    // but we should clear local temp state.
                     currentPath.current = null;
                     setCurrentPathState(null);
                 }
@@ -165,31 +271,36 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
 
     useEffect(() => {
         const handleDrawStroke = (data: any) => {
-            const { path, color, strokeWidth, userId: senderId } = data;
+            const { path, color, strokeWidth, userId: senderId, isEraser: strokeIsEraser } = data;
 
-            // Remove from remote paths since it's now permanent
             setRemotePaths(prev => {
                 const next = { ...prev };
                 delete next[senderId];
                 return next;
             });
 
-            const skPath = Skia.Path.MakeFromSVGString(path);
+            const skPath = scalePathToLocal(path);
             if (skPath) {
-                setPaths((prev) => [...prev, { path: skPath, color, strokeWidth, userId: senderId }]);
+                setPaths((prev) => [...prev, {
+                    path: skPath,
+                    color,
+                    strokeWidth,
+                    userId: senderId,
+                    isEraser: strokeIsEraser || false
+                }]);
             }
         };
 
         const handleDrawingMove = (data: any) => {
-            const { path, color, strokeWidth, userId: senderId } = data;
+            const { path, color, strokeWidth, userId: senderId, isEraser: strokeIsEraser } = data;
 
             if (senderId === userId) return;
 
-            const skPath = Skia.Path.MakeFromSVGString(path);
+            const skPath = scalePathToLocal(path);
             if (skPath) {
                 setRemotePaths(prev => ({
                     ...prev,
-                    [senderId]: { path: skPath, color, strokeWidth }
+                    [senderId]: { path: skPath, color, strokeWidth, isEraser: strokeIsEraser }
                 }));
             }
         };
@@ -199,13 +310,11 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
         };
 
         const handleLoadCanvas = (strokes: any[]) => {
-            console.log('Received load-canvas event with', strokes?.length, 'strokes');
             if (!strokes || !Array.isArray(strokes)) return;
             const loadedPaths = strokes.map(s => {
-                const skPath = Skia.Path.MakeFromSVGString(s.path);
+                const skPath = scalePathToLocal(s.path);
                 return skPath ? { ...s, path: skPath } : null;
             }).filter(Boolean) as Stroke[];
-            console.log('Parsed', loadedPaths.length, 'paths');
             setPaths(loadedPaths);
         };
 
@@ -219,8 +328,10 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
             setRemotePaths({});
         });
 
-        // Request initial state
-        socketService.emit('get-canvas', roomId);
+        // Request canvas data when ready
+        if (isCanvasReady) {
+            socketService.emit('get-canvas', roomId);
+        }
 
         return () => {
             socketService.off('draw-stroke');
@@ -229,49 +340,61 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
             socketService.off('load-canvas');
             socketService.off('clear-canvas');
         };
-    }, [userId]);
+    }, [userId, isCanvasReady]);
+
+    const handleLayout = (event: LayoutChangeEvent) => {
+        const { width, height } = event.nativeEvent.layout;
+        setCanvasSize({ width, height });
+        setIsCanvasReady(true);
+    };
+
+    // Eraser color - use canvas background color
+    const eraserColor = Colors.spiderWhite;
 
     return (
-        <View style={styles.container}>
-            <Canvas style={styles.canvas}>
-                {/* Permanent Paths */}
-                {paths.map((p, index) => (
-                    <Path
-                        key={index}
-                        path={p.path}
-                        color={p.color}
-                        style="stroke"
-                        strokeWidth={p.strokeWidth}
-                        strokeJoin="round"
-                        strokeCap="round"
-                    />
-                ))}
+        <View ref={containerRef} style={styles.container} onLayout={handleLayout}>
+            {/* Canvas wrapper for screenshot capture */}
+            <View ref={canvasWrapperRef} style={styles.canvasWrapper} collapsable={false}>
+                <Canvas style={styles.canvas}>
+                    {/* Permanent Paths */}
+                    {paths.map((p, index) => (
+                        <Path
+                            key={index}
+                            path={p.path}
+                            color={p.isEraser ? eraserColor : p.color}
+                            style="stroke"
+                            strokeWidth={p.isEraser ? p.strokeWidth * 2 : p.strokeWidth}
+                            strokeJoin="round"
+                            strokeCap="round"
+                        />
+                    ))}
 
-                {/* Remote Live Paths */}
-                {Object.entries(remotePaths).map(([uid, p]) => (
-                    <Path
-                        key={uid}
-                        path={p.path}
-                        color={p.color}
-                        style="stroke"
-                        strokeWidth={p.strokeWidth}
-                        strokeJoin="round"
-                        strokeCap="round"
-                    />
-                ))}
+                    {/* Remote Live Paths */}
+                    {Object.entries(remotePaths).map(([uid, p]) => (
+                        <Path
+                            key={uid}
+                            path={p.path}
+                            color={p.isEraser ? eraserColor : p.color}
+                            style="stroke"
+                            strokeWidth={p.isEraser ? p.strokeWidth * 2 : p.strokeWidth}
+                            strokeJoin="round"
+                            strokeCap="round"
+                        />
+                    ))}
 
-                {/* My Current Path */}
-                {currentPathState && (
-                    <Path
-                        path={currentPathState}
-                        color={color}
-                        style="stroke"
-                        strokeWidth={strokeWidth}
-                        strokeJoin="round"
-                        strokeCap="round"
-                    />
-                )}
-            </Canvas>
+                    {/* My Current Path */}
+                    {currentPathState && (
+                        <Path
+                            path={currentPathState}
+                            color={isEraser ? eraserColor : color}
+                            style="stroke"
+                            strokeWidth={isEraser ? strokeWidth * 2 : strokeWidth}
+                            strokeJoin="round"
+                            strokeCap="round"
+                        />
+                    )}
+                </Canvas>
+            </View>
             <View style={styles.gestureOverlay} {...panResponder.panHandlers} />
         </View>
     );
@@ -284,6 +407,10 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: Colors.spiderWhite,
         position: 'relative',
+    },
+    canvasWrapper: {
+        flex: 1,
+        backgroundColor: Colors.spiderWhite,
     },
     canvas: {
         flex: 1,

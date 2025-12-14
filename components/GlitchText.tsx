@@ -1,6 +1,14 @@
 import React, { useEffect } from 'react';
 import { TextStyle, View } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, {
+    Easing,
+    useAnimatedStyle,
+    useSharedValue,
+    withDelay,
+    withRepeat,
+    withSequence,
+    withTiming,
+} from 'react-native-reanimated';
 import { Colors } from '../constants/Colors';
 
 interface GlitchTextProps {
@@ -9,25 +17,45 @@ interface GlitchTextProps {
     color?: string;
     fontSize?: number;
     highlightColor?: string;
+    outlineColor?: string;
+    chaosLevel?: 'low' | 'medium' | 'high';
 }
 
-export default function GlitchText({ text, style, color = Colors.spiderRed, fontSize = 40, highlightColor = 'white' }: GlitchTextProps) {
-    // Independent jitter for layers
+export default function GlitchText({
+    text,
+    style,
+    color = Colors.spiderRed,
+    fontSize = 40,
+    highlightColor = 'white',
+    outlineColor,
+    chaosLevel = 'medium',
+}: GlitchTextProps) {
+    // Animation values
     const jitterX = useSharedValue(0);
     const jitterY = useSharedValue(0);
-    const scaleX = useSharedValue(1); // For horizontal stretching
-    const scaleY = useSharedValue(1); // For vertical squashing
+    const scaleX = useSharedValue(1);
+    const scaleY = useSharedValue(1);
+    const sliceOffset = useSharedValue(0);
+    const scanLineY = useSharedValue(-20);
+    const frameSkip = useSharedValue(1);
+    const cyanOffset = useSharedValue(0);
+    const magentaOffset = useSharedValue(0);
+
+    // Chaos multipliers
+    const chaosMult = chaosLevel === 'high' ? 3 : chaosLevel === 'low' ? 0.5 : 1;
+    const glitchFreq = chaosLevel === 'high' ? 1000 : chaosLevel === 'low' ? 4000 : 2000;
 
     useEffect(() => {
-        // Continuous subtle vibration (Alive feel)
+        // Base vibration
         jitterX.value = withRepeat(
             withSequence(
-                withTiming(-2, { duration: 50 }),
-                withTiming(2, { duration: 50 }),
-                withTiming(0, { duration: 50 }),
-                withDelay(2000, withSequence( // Occasional violent glitch
-                    withTiming(-10, { duration: 20 }),
-                    withTiming(10, { duration: 20 }),
+                withTiming(-1.5 * chaosMult, { duration: 40 }),
+                withTiming(1.5 * chaosMult, { duration: 40 }),
+                withTiming(0, { duration: 40 }),
+                withDelay(glitchFreq, withSequence(
+                    withTiming(-8 * chaosMult, { duration: 15 }),
+                    withTiming(8 * chaosMult, { duration: 15 }),
+                    withTiming(-4 * chaosMult, { duration: 10 }),
                     withTiming(0, { duration: 20 })
                 ))
             ),
@@ -37,70 +65,143 @@ export default function GlitchText({ text, style, color = Colors.spiderRed, font
 
         jitterY.value = withRepeat(
             withSequence(
-                withTiming(1, { duration: 80 }),
-                withTiming(-1, { duration: 80 }),
-                withTiming(0, { duration: 80 })
+                withTiming(0.8 * chaosMult, { duration: 60 }),
+                withTiming(-0.8 * chaosMult, { duration: 60 }),
+                withTiming(0, { duration: 60 })
             ),
             -1,
             true
         );
 
-        // Random scale distortion (Squash and Stretch)
+        // Scale distortion (squash & stretch)
         scaleX.value = withRepeat(
             withSequence(
-                withDelay(1000, withTiming(1.05, { duration: 50 })), // Stretch
-                withTiming(1, { duration: 50 }),
-                withDelay(3000, withTiming(0.9, { duration: 30 })), // Squash
-                withTiming(1.1, { duration: 20 }), // Snap back overshoot
-                withTiming(1, { duration: 50 })
+                withDelay(800, withTiming(1 + 0.04 * chaosMult, { duration: 40 })),
+                withTiming(1, { duration: 40 }),
+                withDelay(glitchFreq * 1.5, withSequence(
+                    withTiming(1 - 0.08 * chaosMult, { duration: 25 }),
+                    withTiming(1 + 0.06 * chaosMult, { duration: 15 }),
+                    withTiming(1, { duration: 40 })
+                ))
             ),
             -1,
             true
         );
 
-    }, []);
+        // Chromatic aberration - more aggressive
+        cyanOffset.value = withRepeat(
+            withSequence(
+                withTiming(0, { duration: glitchFreq }),
+                withTiming(-3 * chaosMult, { duration: 20, easing: Easing.linear }),
+                withTiming(-1 * chaosMult, { duration: 80 }),
+                withTiming(0, { duration: 100 }),
+                withDelay(glitchFreq * 0.5, withTiming(0, { duration: 0 }))
+            ),
+            -1,
+            false
+        );
 
-    const animatedStyle = useAnimatedStyle(() => ({
+        magentaOffset.value = withRepeat(
+            withSequence(
+                withTiming(0, { duration: glitchFreq }),
+                withTiming(3 * chaosMult, { duration: 20, easing: Easing.linear }),
+                withTiming(1 * chaosMult, { duration: 80 }),
+                withTiming(0, { duration: 100 }),
+                withDelay(glitchFreq * 0.5, withTiming(0, { duration: 0 }))
+            ),
+            -1,
+            false
+        );
+
+        // Slice displacement
+        sliceOffset.value = withRepeat(
+            withSequence(
+                withTiming(0, { duration: glitchFreq * 2 }),
+                withTiming(6 * chaosMult, { duration: 30 }),
+                withTiming(-4 * chaosMult, { duration: 20 }),
+                withTiming(0, { duration: 50 }),
+                withDelay(glitchFreq, withTiming(0, { duration: 0 }))
+            ),
+            -1,
+            false
+        );
+
+        // Frame skip (opacity flicker)
+        frameSkip.value = withRepeat(
+            withSequence(
+                withTiming(1, { duration: glitchFreq * 3 }),
+                withTiming(0, { duration: 30 }),
+                withTiming(1, { duration: 30 }),
+                withTiming(0.7, { duration: 20 }),
+                withTiming(1, { duration: 50 }),
+                withDelay(glitchFreq * 2, withTiming(1, { duration: 0 }))
+            ),
+            -1,
+            false
+        );
+
+        // Scan line
+        scanLineY.value = withRepeat(
+            withSequence(
+                withDelay(glitchFreq * 4, withTiming(-20, { duration: 0 })),
+                withTiming(fontSize + 20, { duration: 300, easing: Easing.linear }),
+                withDelay(glitchFreq * 3, withTiming(-20, { duration: 0 }))
+            ),
+            -1,
+            false
+        );
+    }, [chaosLevel]);
+
+    const mainAnimStyle = useAnimatedStyle(() => ({
         transform: [
             { translateX: jitterX.value },
             { translateY: jitterY.value },
             { scaleX: scaleX.value },
-            { scaleY: scaleY.value } // Could also animate Y inverse to X
-        ]
-    }));
-
-    // Cyan moves LEFT and Up violently
-    const cyanShadowStyle = useAnimatedStyle(() => ({
-        transform: [
-            { translateX: jitterX.value - 6 },
-            { translateY: jitterY.value + 3 },
-            { scaleX: scaleX.value * 1.02 }
+            { scaleY: scaleY.value },
         ],
-        opacity: 0.9
+        opacity: frameSkip.value,
     }));
 
-    // Magenta moves RIGHT and Down violently
-    const magentaShadowStyle = useAnimatedStyle(() => ({
+    const cyanStyle = useAnimatedStyle(() => ({
         transform: [
-            { translateX: jitterX.value + 6 },
-            { translateY: jitterY.value - 3 },
-            { scaleX: scaleX.value * 0.98 }
+            { translateX: jitterX.value + cyanOffset.value },
+            { translateY: jitterY.value - 1 },
+            { scaleX: scaleX.value * 1.01 },
         ],
-        opacity: 0.9
+        opacity: 0.4,
     }));
 
-    // Base font style without position: absolute
+    const magentaStyle = useAnimatedStyle(() => ({
+        transform: [
+            { translateX: jitterX.value + magentaOffset.value },
+            { translateY: jitterY.value + 1 },
+            { scaleX: scaleX.value * 0.99 },
+        ],
+        opacity: 0.4,
+    }));
+
+    const sliceStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: sliceOffset.value }],
+    }));
+
+    const scanLineStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: scanLineY.value }],
+    }));
+
     const fontStyle: TextStyle = {
         fontFamily: 'Bangers_400Regular',
         fontSize,
+        textAlign: 'center',
+        textAlignVertical: 'center',
+        includeFontPadding: false,
         ...style,
     };
 
     return (
-        <View style={{ position: 'relative', alignItems: 'center', maxWidth: '100%' }}>
-            {/* INVISIBLE LAYOUT TEXT: Determines container size. Force single line & Autosize */}
+        <View style={{ position: 'relative', alignItems: 'center', justifyContent: 'center', maxWidth: '100%' }}>
+            {/* Black extrusion background */}
             <Animated.Text
-                style={[fontStyle, { opacity: 0, textAlign: 'center' }]}
+                style={[fontStyle, mainAnimStyle, { position: 'absolute', color: 'black', top: 4, left: 4, zIndex: 0 }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.4}
@@ -108,9 +209,9 @@ export default function GlitchText({ text, style, color = Colors.spiderRed, font
                 {text}
             </Animated.Text>
 
-            {/* Electric Cyan Shadow (Offset Down-Right) */}
+            {/* Cyan chromatic layer */}
             <Animated.Text
-                style={[fontStyle, cyanShadowStyle, { position: 'absolute', color: Colors.spiderBlue, width: '100%', textAlign: 'center' }]}
+                style={[fontStyle, cyanStyle, { position: 'absolute', color: Colors.glitchCyan, zIndex: 1 }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.4}
@@ -118,9 +219,9 @@ export default function GlitchText({ text, style, color = Colors.spiderRed, font
                 {text}
             </Animated.Text>
 
-            {/* Hot Magenta Shadow (Offset Up-Left) */}
+            {/* Magenta chromatic layer */}
             <Animated.Text
-                style={[fontStyle, magentaShadowStyle, { position: 'absolute', color: Colors.spiderMagenta, width: '100%', textAlign: 'center' }]}
+                style={[fontStyle, magentaStyle, { position: 'absolute', color: Colors.glitchMagenta, zIndex: 1 }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.4}
@@ -128,28 +229,75 @@ export default function GlitchText({ text, style, color = Colors.spiderRed, font
                 {text}
             </Animated.Text>
 
-            {/* EXTREME Black Extrusion (For that heavy ink feel) */}
-            <Animated.Text
-                style={[fontStyle, animatedStyle, { position: 'absolute', textShadowColor: 'black', textShadowRadius: 1, textShadowOffset: { width: 5, height: 5 }, color: 'black', top: 3, left: 3, opacity: 1, width: '100%', textAlign: 'center' }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.4}
-            >
-                {text}
-            </Animated.Text>
-
-            {/* White Outline Halo (Visibility Layer for Black Text) */}
-            {color === 'black' && (
+            {/* Outline for visibility if color is black */}
+            {(color === 'black' || outlineColor) && (
                 <>
-                    <Animated.Text style={[fontStyle, animatedStyle, { position: 'absolute', top: 0, left: 0, color: 'white', textShadowColor: 'white', textShadowOffset: { width: 2, height: 0 }, textShadowRadius: 0, zIndex: 1, width: '100%', textAlign: 'center' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.4}>{text}</Animated.Text>
-                    <Animated.Text style={[fontStyle, animatedStyle, { position: 'absolute', top: 0, left: 0, color: 'white', textShadowColor: 'white', textShadowOffset: { width: -2, height: 0 }, textShadowRadius: 0, zIndex: 1, width: '100%', textAlign: 'center' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.4}>{text}</Animated.Text>
-                    <Animated.Text style={[fontStyle, animatedStyle, { position: 'absolute', top: 0, left: 0, color: 'white', textShadowColor: 'white', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 0, zIndex: 1, width: '100%', textAlign: 'center' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.4}>{text}</Animated.Text>
-                    <Animated.Text style={[fontStyle, animatedStyle, { position: 'absolute', top: 0, left: 0, color: 'white', textShadowColor: 'white', textShadowOffset: { width: 0, height: -2 }, textShadowRadius: 0, zIndex: 1, width: '100%', textAlign: 'center' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.4}>{text}</Animated.Text>
+                    <Animated.Text
+                        style={[fontStyle, mainAnimStyle, {
+                            position: 'absolute',
+                            color: outlineColor || 'white',
+                            textShadowColor: outlineColor || 'white',
+                            textShadowOffset: { width: 2, height: 0 },
+                            textShadowRadius: 0,
+                            zIndex: 2,
+                        }]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.4}
+                    >
+                        {text}
+                    </Animated.Text>
+                    <Animated.Text
+                        style={[fontStyle, mainAnimStyle, {
+                            position: 'absolute',
+                            color: outlineColor || 'white',
+                            textShadowColor: outlineColor || 'white',
+                            textShadowOffset: { width: -2, height: 0 },
+                            textShadowRadius: 0,
+                            zIndex: 2,
+                        }]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.4}
+                    >
+                        {text}
+                    </Animated.Text>
+                    <Animated.Text
+                        style={[fontStyle, mainAnimStyle, {
+                            position: 'absolute',
+                            color: outlineColor || 'white',
+                            textShadowColor: outlineColor || 'white',
+                            textShadowOffset: { width: 0, height: 2 },
+                            textShadowRadius: 0,
+                            zIndex: 2,
+                        }]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.4}
+                    >
+                        {text}
+                    </Animated.Text>
+                    <Animated.Text
+                        style={[fontStyle, mainAnimStyle, {
+                            position: 'absolute',
+                            color: outlineColor || 'white',
+                            textShadowColor: outlineColor || 'white',
+                            textShadowOffset: { width: 0, height: -2 },
+                            textShadowRadius: 0,
+                            zIndex: 2,
+                        }]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.4}
+                    >
+                        {text}
+                    </Animated.Text>
                 </>
             )}
 
+            {/* Main text */}
             <Animated.Text
-                style={[fontStyle, animatedStyle, { position: 'absolute', textShadowColor: 'black', textShadowRadius: 1, textShadowOffset: { width: 4, height: 4 }, color: 'black', top: 2, left: 2, opacity: 1, width: '100%', textAlign: 'center' }]}
+                style={[fontStyle, mainAnimStyle, { color, zIndex: 10 }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.4}
@@ -157,9 +305,16 @@ export default function GlitchText({ text, style, color = Colors.spiderRed, font
                 {text}
             </Animated.Text>
 
-            {/* Main Primary Layer (Crimson) */}
+            {/* Highlight layer */}
             <Animated.Text
-                style={[fontStyle, animatedStyle, { position: 'absolute', top: 0, left: 0, color: color, zIndex: 10, width: '100%', textAlign: 'center' }]}
+                style={[fontStyle, mainAnimStyle, {
+                    position: 'absolute',
+                    top: -1,
+                    left: -1,
+                    color: highlightColor,
+                    zIndex: 11,
+                    opacity: 0.5,
+                }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
                 minimumFontScale={0.4}
@@ -167,15 +322,44 @@ export default function GlitchText({ text, style, color = Colors.spiderRed, font
                 {text}
             </Animated.Text>
 
-            {/* White Ink Highlight (Top Left - Pop) */}
-            <Animated.Text
-                style={[fontStyle, animatedStyle, { position: 'absolute', top: -2, left: -2, color: highlightColor, zIndex: 11, opacity: 0.8, width: '100%', textAlign: 'center' }]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.4}
+            {/* Horizontal slice that moves independently */}
+            <Animated.View
+                style={[
+                    {
+                        position: 'absolute',
+                        height: fontSize * 0.2,
+                        width: '120%',
+                        overflow: 'hidden',
+                        top: fontSize * 0.4,
+                        zIndex: 12,
+                    },
+                    sliceStyle,
+                ]}
             >
-                {text}
-            </Animated.Text>
+                <Animated.Text
+                    style={[fontStyle, { color, marginTop: -fontSize * 0.4 }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.4}
+                >
+                    {text}
+                </Animated.Text>
+            </Animated.View>
+
+            {/* Scan line passing through */}
+            <Animated.View
+                style={[
+                    {
+                        position: 'absolute',
+                        left: -10,
+                        right: -10,
+                        height: 2,
+                        backgroundColor: 'rgba(255,255,255,0.4)',
+                        zIndex: 15,
+                    },
+                    scanLineStyle,
+                ]}
+            />
         </View>
     );
 }
