@@ -1,22 +1,23 @@
 export const Colors = {
-    // Spider-Verse Palette
-    spiderRed: '#FF004D',
-    spiderBlue: '#00D2FF',
-    spiderBlack: '#111111',
-    spiderWhite: '#FFFFFF',
-    spiderYellow: '#FFEB3B',
-    spiderPurple: '#9C27B0',
-    spiderGreen: '#00E676',
+    // Spider-Man: Across the Spider-Verse Palette
+    spiderRed: '#D90429', // Deep Crimson/Blood Red - Miles' spray paint
+    spiderBlue: '#00F0FF', // Electric Cyan - Glitch effect
+    spiderYellow: '#FFF000', // Punchy Yellow
+    spiderBlack: '#000000', // PURE Ink Black
+    spiderWhite: '#F0F0F0',
+    spiderGreen: '#00FF41',
+    spiderViolet: '#9D00FF', // Prowler Violet
+    spiderMagenta: '#FF0090', // Hot Magenta Shadow
 
-    // UI Colors
-    background: '#F5F5F5',
-    text: '#111111',
-    tint: '#FF004D',
-    tabIconDefault: '#ccc',
-    tabIconSelected: '#FF004D',
+    // Semantic
+    primary: '#D90429',
+    secondary: '#00F0FF',
+    accent: '#FFF000',
+    background: '#000000',
+    text: '#FFFFFF',
 
-    // Custom Gradients (simulated with arrays if needed later)
-    neonGradient: ['#FF004D', '#00D2FF'],
+    // Gradients/Effects
+    halftoneDots: 'rgba(0,0,0,0.15)',
 };
 
 export const Theme = {

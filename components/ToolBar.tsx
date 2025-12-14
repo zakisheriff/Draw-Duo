@@ -34,7 +34,7 @@ export default function ToolBar({
         Colors.spiderBlue,
         Colors.spiderBlack,
         Colors.spiderYellow,
-        Colors.spiderPurple,
+        Colors.spiderViolet,
         Colors.spiderGreen,
         '#FFFFFF',
     ];

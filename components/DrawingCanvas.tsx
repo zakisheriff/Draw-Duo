@@ -219,6 +219,9 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
             setRemotePaths({});
         });
 
+        // Request initial state
+        socketService.emit('get-canvas', roomId);
+
         return () => {
             socketService.off('draw-stroke');
             socketService.off('drawing-move');

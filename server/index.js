@@ -40,6 +40,14 @@ io.on('connection', (socket) => {
         socket.to(roomId).emit('user-joined', { userId: socket.id });
     });
 
+    // Explicit request for canvas state
+    socket.on('get-canvas', (roomId) => {
+        if (rooms[roomId]) {
+            console.log(`Sending requested history to ${socket.id} for room ${roomId}`);
+            socket.emit('load-canvas', rooms[roomId].strokes);
+        }
+    });
+
     // Client sends a full path or segment
     socket.on('draw-stroke', ({ roomId, path, color, strokeWidth }) => {
         const strokeData = { path, color, strokeWidth, userId: socket.id };
