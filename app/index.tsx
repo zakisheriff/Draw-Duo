@@ -3,12 +3,15 @@ import CustomToast from '@/components/CustomToast';
 import DimensionGlitchOverlay from '@/components/DimensionGlitchOverlay';
 import GraffitiBackground from '@/components/GraffitiBackground';
 import MessyInput from '@/components/MessyInput';
+import RoomHistoryOverlay from '@/components/RoomHistoryOverlay';
 import SpiderSymbol from '@/components/SpiderSymbol';
 import WebShoot from '@/components/WebShoot';
 import WebSlinger from '@/components/WebSlinger';
+import { saveRoomToHistory } from '@/services/roomHistory';
 import socketService from '@/services/socket';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
+import { History, Swords } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Dimensions, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import Animated, { FadeInDown, FadeInUp, ZoomIn } from 'react-native-reanimated';
@@ -31,10 +34,11 @@ export default function HomeScreen() {
     const router = useRouter();
     const [roomId, setRoomId] = useState('');
     const [username, setUsername] = useState('');
-    const [webShots, setWebShots] = useState<{ id: number, x: number, y: number }[]>([]);
+    const [webShots, setWebShots] = useState<{ id: string, x: number, y: number }[]>([]);
     const [toast, setToast] = useState({ visible: false, message: '', type: 'error' as 'error' | 'success' });
     const [webSlingerCoords, setWebSlingerCoords] = useState({ x: 0, y: 0 });
     const [webSlingerActive, setWebSlingerActive] = useState(false);
+    const [showHistory, setShowHistory] = useState(false);
 
     useEffect(() => {
         socketService.connect();
@@ -48,7 +52,8 @@ export default function HomeScreen() {
         Keyboard.dismiss();
         setWebSlingerActive(false); // Fade away the web when touching elsewhere
         const { locationX, locationY } = evt.nativeEvent;
-        const id = Date.now();
+        // Use timestamp + random string for guaranteed uniqueness
+        const id = Date.now() + Math.random().toString(36).substring(2, 9);
 
         // Add web shot
         setWebShots(prev => [...prev, { id, x: locationX, y: locationY }]);
@@ -61,6 +66,7 @@ export default function HomeScreen() {
             return;
         }
         const newRoomId = Math.floor(10000 + Math.random() * 90000).toString();
+        saveRoomToHistory(newRoomId, username);
         router.push({ pathname: '/room/[id]', params: { id: newRoomId, username } });
     };
 
@@ -75,17 +81,40 @@ export default function HomeScreen() {
         let answered = false;
         const timeout = setTimeout(() => {
             if (!answered) showToast('SERVER UNREACHABLE', 'error');
-        }, 2000);
+        }, 3000);
 
-        socketService.emit('check-room', roomId, (exists: boolean) => {
-            answered = true;
-            clearTimeout(timeout);
-            if (exists) {
+        // First check regular rooms
+        socketService.emit('check-room', roomId, (regularExists: boolean) => {
+            if (regularExists) {
+                answered = true;
+                clearTimeout(timeout);
+                saveRoomToHistory(roomId, username);
                 router.push({ pathname: '/room/[id]', params: { id: roomId, username } });
-            } else {
-                showToast('ROOM NOT FOUND!', 'error');
+                return;
             }
+
+            // If no regular room, check VS rooms
+            socketService.emit('check-vs-room', roomId, (vsExists: boolean) => {
+                answered = true;
+                clearTimeout(timeout);
+                if (vsExists) {
+                    // Join VS room
+                    router.push({ pathname: '/room/vs/[id]', params: { id: roomId, username, timeLimit: '90' } });
+                } else {
+                    showToast('ROOM NOT FOUND!', 'error');
+                }
+            });
         });
+    };
+
+    const createVSSession = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+        if (!username) {
+            showToast('ENTER A NAME, HERO!', 'error');
+            return;
+        }
+        const newRoomId = Math.floor(10000 + Math.random() * 90000).toString();
+        router.push({ pathname: '/room/vs/[id]', params: { id: newRoomId, username, timeLimit: '90' } });
     };
 
     return (
@@ -119,10 +148,7 @@ export default function HomeScreen() {
                         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" bounces={false}>
                             <Animated.View entering={FadeInDown.duration(600)} style={styles.content}>
 
-                                {/* Spider Symbol - Smaller */}
-                                <Animated.View entering={ZoomIn.delay(100).duration(400)} style={styles.spiderContainer}>
-                                    <SpiderSymbol size={50} color={ATSV.milesRed} animated />
-                                </Animated.View>
+
 
                                 {/* SWING MATES Title - Tight like iOS */}
                                 <View style={styles.titleWrapper}>
@@ -194,6 +220,18 @@ export default function HomeScreen() {
                                             <Text style={[styles.btnText, { color: 'white' }]}>NEW DIMENSION</Text>
                                         </View>
                                     </TouchableOpacity>
+
+                                    {/* History Button */}
+                                    <TouchableOpacity style={styles.historyBtn} onPress={() => setShowHistory(true)} activeOpacity={0.9}>
+                                        <History color={ATSV.neonYellow} size={18} />
+                                        <Text style={styles.historyText}>ROOM HISTORY</Text>
+                                    </TouchableOpacity>
+
+                                    {/* VS MODE Button */}
+                                    <TouchableOpacity style={styles.vsModeBtn} onPress={createVSSession} activeOpacity={0.9}>
+                                        <Swords color="white" size={20} />
+                                        <Text style={styles.vsModeText}>VS MODE</Text>
+                                    </TouchableOpacity>
                                 </Animated.View>
 
                             </Animated.View>
@@ -208,6 +246,13 @@ export default function HomeScreen() {
                     targetX={webSlingerCoords.x}
                     targetY={webSlingerCoords.y}
                     active={webSlingerActive}
+                />
+
+                {/* Room History Overlay */}
+                <RoomHistoryOverlay
+                    visible={showHistory}
+                    onClose={() => setShowHistory(false)}
+                    currentUsername={username}
                 />
             </View>
         </TouchableWithoutFeedback>
@@ -325,5 +370,41 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: 'rgba(255,255,255,0.6)',
         marginVertical: 8,
+    },
+    historyBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginTop: 15,
+        paddingVertical: 8,
+        paddingHorizontal: 16,
+        borderWidth: 2,
+        borderColor: 'rgba(255, 255, 255, 0.3)',
+        borderRadius: 20,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    },
+    historyText: {
+        fontFamily: 'Bangers_400Regular',
+        fontSize: 14,
+        color: ATSV.neonYellow,
+        letterSpacing: 1,
+    },
+    vsModeBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginTop: 10,
+        paddingVertical: 12,
+        paddingHorizontal: 24,
+        borderWidth: 3,
+        borderColor: ATSV.hotPink,
+        borderRadius: 8,
+        backgroundColor: ATSV.prowlerPurple,
+    },
+    vsModeText: {
+        fontFamily: 'Bangers_400Regular',
+        fontSize: 18,
+        color: 'white',
+        letterSpacing: 1,
     },
 });

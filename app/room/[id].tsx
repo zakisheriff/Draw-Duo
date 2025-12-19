@@ -1,13 +1,14 @@
 import ChatOverlay from '@/components/ChatOverlay';
 import CustomToast from '@/components/CustomToast';
 import DrawingCanvas, { CanvasRef } from '@/components/DrawingCanvas';
+import ReferenceImageOverlay from '@/components/ReferenceImageOverlay';
 import SpiderAlert from '@/components/SpiderAlert';
 import ToolBar from '@/components/ToolBar';
 import { Colors } from '@/constants/Colors';
 import socketService from '@/services/socket';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeInDown, FadeInUp, SlideInRight, SlideOutRight } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -19,6 +20,11 @@ export default function RoomScreen() {
     const [connectedUsers, setConnectedUsers] = useState<string[]>([]);
     const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'error' | 'success' });
     const [showClearAlert, setShowClearAlert] = useState(false);
+    const [showReferencePanel, setShowReferencePanel] = useState(false);
+
+    // Reference image state - synced across devices (base64 data)
+    const [referenceImageData, setReferenceImageData] = useState<string | null>(null);
+    const [referenceOpacity, setReferenceOpacity] = useState(0.3);
 
     // Stable User ID across renders
     const userId = React.useMemo(() =>
@@ -78,10 +84,23 @@ export default function RoomScreen() {
         socketService.on('user-left', handleUserLeft);
         socketService.on('room-users', handleRoomUsers);
 
+        // Listen for reference image updates from other users (base64 data)
+        socketService.on('reference-image-update', (data: { imageData: string | null, opacity: number }) => {
+            setReferenceImageData(data.imageData);
+            setReferenceOpacity(data.opacity);
+        });
+
+        // Listen for live opacity changes
+        socketService.on('reference-opacity-update', (data: { opacity: number }) => {
+            setReferenceOpacity(data.opacity);
+        });
+
         return () => {
             socketService.off('user-joined');
             socketService.off('user-left');
             socketService.off('room-users');
+            socketService.off('reference-image-update');
+            socketService.off('reference-opacity-update');
         };
     }, [id, username]);
 
@@ -167,6 +186,16 @@ export default function RoomScreen() {
             <Animated.View entering={FadeInUp.delay(200).duration(500)} style={styles.canvasWrapper}>
                 <View style={styles.canvasShadow} />
                 <View style={styles.canvasFrame}>
+                    {/* Permanent Reference Image - ALWAYS visible when applied */}
+                    {referenceImageData && (
+                        <View style={[styles.referenceImageContainer, { opacity: referenceOpacity }]} pointerEvents="none">
+                            <Image
+                                source={{ uri: `data:image/jpeg;base64,${referenceImageData}` }}
+                                style={styles.referenceImage}
+                                resizeMode="contain"
+                            />
+                        </View>
+                    )}
                     <DrawingCanvas
                         ref={canvasRef}
                         roomId={id}
@@ -183,6 +212,30 @@ export default function RoomScreen() {
                 </View>
             </Animated.View>
 
+            {/* Reference Image Control Panel */}
+            <ReferenceImageOverlay
+                visible={showReferencePanel}
+                onClose={() => setShowReferencePanel(false)}
+                appliedImageData={referenceImageData}
+                appliedOpacity={referenceOpacity}
+                onApplyImage={(base64Data, opacity) => {
+                    setReferenceImageData(base64Data);
+                    setReferenceOpacity(opacity);
+                    // Emit to sync with other users
+                    socketService.emit('reference-image-update', { roomId: id, imageData: base64Data, opacity });
+                }}
+                onClearImage={() => {
+                    setReferenceImageData(null);
+                    setReferenceOpacity(0.3);
+                    socketService.emit('reference-image-update', { roomId: id, imageData: null, opacity: 0.3 });
+                }}
+                onOpacityChange={(opacity) => {
+                    setReferenceOpacity(opacity);
+                    // Live sync opacity changes
+                    socketService.emit('reference-opacity-update', { roomId: id, opacity });
+                }}
+            />
+
             {/* Chat Overlay */}
             <ChatOverlay roomId={id} userId={userId} />
 
@@ -198,9 +251,11 @@ export default function RoomScreen() {
                 isEyedropperActive={isEyedropper}
                 onToggleEyedropper={() => {
                     canvasRef.current?.toggleEyedropper();
-                    setIsEyedropper(p => !p);
+                    setIsEyedropper((p: boolean) => !p);
                 }}
                 onExport={handleExport}
+                onToggleReferenceImage={() => setShowReferencePanel((p: boolean) => !p)}
+                isReferenceImageActive={showReferencePanel || !!referenceImageData}
             />
 
             {/* Spider-Verse Clear Confirmation */}
@@ -230,9 +285,9 @@ const styles = StyleSheet.create({
         paddingHorizontal: 10,
         paddingTop: 5,
         paddingBottom: 10,
-        backgroundColor: Colors.spiderYellow,
+        backgroundColor: '#1A1A2E',
         borderBottomWidth: 4,
-        borderBottomColor: 'black',
+        borderBottomColor: Colors.spiderRed,
         zIndex: 10,
     },
     headerBadge: {
@@ -301,7 +356,15 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: 'white',
         borderWidth: Platform.OS === 'android' ? 2 : 4,
-        borderColor: 'black',
+        borderColor: Colors.spiderRed,
         overflow: 'hidden',
+    },
+    referenceImageContainer: {
+        ...StyleSheet.absoluteFillObject,
+        zIndex: 1,
+    },
+    referenceImage: {
+        width: '100%',
+        height: '100%',
     },
 });

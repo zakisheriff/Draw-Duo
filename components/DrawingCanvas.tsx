@@ -24,6 +24,8 @@ export interface CanvasRef {
     isEyedropperActive: boolean;
     clear: () => void;
     exportCanvas: () => Promise<string | null>;
+    historyCount: number;
+    redoCount: number;
 }
 
 interface CanvasProps {
@@ -56,6 +58,11 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
     const isEraserRef = useRef(isEraser);
     const pathsRef = useRef(paths);
     const canvasSizeRef = useRef(canvasSize);
+    const lastValidPosition = useRef<{ x: number; y: number } | null>(null);
+    const previousPoint = useRef<{ x: number; y: number } | null>(null);
+
+    // Maximum allowed distance between consecutive points (to detect jumps)
+    const MAX_JUMP_DISTANCE = 80;
 
     useEffect(() => { colorRef.current = color; }, [color]);
     useEffect(() => { strokeWidthRef.current = strokeWidth; }, [strokeWidth]);
@@ -134,6 +141,8 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
         toggleEyedropper: () => setIsEyedropperActive(p => !p),
         isEyedropperActive,
         clear: () => setPaths([]),
+        historyCount: paths.length,
+        redoCount: redoStack.length,
         exportCanvas: async () => {
             try {
                 // Capture the view using react-native-view-shot
@@ -144,7 +153,10 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                         quality: 1,
                     });
 
-                    // Try to save to MediaLibrary on both platforms
+                    // Import Platform at the top level to check OS
+                    const { Platform, Alert } = require('react-native');
+
+                    // Try to save to MediaLibrary
                     try {
                         const { status } = await ExpoMediaLibrary.requestPermissionsAsync();
                         if (status === 'granted') {
@@ -153,20 +165,38 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                             return asset.uri;
                         } else {
                             console.log('Permission denied');
-                            const { Alert } = require('react-native');
                             Alert.alert('Permission Denied', 'Please allow photo access to save drawings.');
                             return null;
                         }
                     } catch (mediaError: any) {
                         console.log('MediaLibrary error:', mediaError);
-                        // If MediaLibrary fails (Expo Go Android limitation), show message
-                        const { Alert, Platform } = require('react-native');
+
+                        // On Android, use expo-sharing as a fallback
                         if (Platform.OS === 'android') {
-                            Alert.alert(
-                                'Expo Go Limitation',
-                                'To save images on Android, you need a development build. The image was captured but cannot be saved in Expo Go.',
-                                [{ text: 'OK' }]
-                            );
+                            try {
+                                const Sharing = await import('expo-sharing');
+                                const isAvailable = await Sharing.isAvailableAsync();
+                                if (isAvailable) {
+                                    await Sharing.shareAsync(uri, {
+                                        mimeType: 'image/png',
+                                        dialogTitle: 'Save your drawing',
+                                    });
+                                    return uri; // Return URI to indicate success
+                                } else {
+                                    Alert.alert(
+                                        'Cannot Share',
+                                        'Sharing is not available on this device.',
+                                        [{ text: 'OK' }]
+                                    );
+                                }
+                            } catch (shareError) {
+                                console.log('Sharing error:', shareError);
+                                Alert.alert(
+                                    'Export Info',
+                                    'The image was captured. To save directly to gallery, please use a development build.',
+                                    [{ text: 'OK' }]
+                                );
+                            }
                         }
                         return null;
                     }
@@ -209,6 +239,9 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                 newPath.moveTo(locationX, locationY);
                 currentPath.current = newPath;
                 setCurrentPathState(newPath.copy());
+
+                // Initialize last valid position for jump detection
+                lastValidPosition.current = { x: locationX, y: locationY };
             },
             onPanResponderMove: (evt: GestureResponderEvent) => {
                 if (isEyedropperActiveRef.current) return;
@@ -220,8 +253,32 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                 locationX = Math.max(0, Math.min(locationX, width));
                 locationY = Math.max(0, Math.min(locationY, height));
 
+                // Check for sudden jumps (Android edge bug)
+                if (lastValidPosition.current) {
+                    const dx = Math.abs(locationX - lastValidPosition.current.x);
+                    const dy = Math.abs(locationY - lastValidPosition.current.y);
+                    if (dx > MAX_JUMP_DISTANCE || dy > MAX_JUMP_DISTANCE) {
+                        // Skip this point - it's a jump, don't update path
+                        return;
+                    }
+                }
+
+                // Update last valid position
+                lastValidPosition.current = { x: locationX, y: locationY };
+
                 if (currentPath.current) {
-                    currentPath.current.lineTo(locationX, locationY);
+                    // Use quadratic bezier curves for smooth drawing
+                    if (previousPoint.current) {
+                        // Calculate midpoint for smooth curve
+                        const midX = (previousPoint.current.x + locationX) / 2;
+                        const midY = (previousPoint.current.y + locationY) / 2;
+                        // Draw quadratic bezier curve through the previous point to the midpoint
+                        currentPath.current.quadTo(previousPoint.current.x, previousPoint.current.y, midX, midY);
+                    } else {
+                        // First move, just lineTo
+                        currentPath.current.lineTo(locationX, locationY);
+                    }
+                    previousPoint.current = { x: locationX, y: locationY };
                     setCurrentPathState(currentPath.current.copy());
 
                     const normalizedPath = scalePathToNormalized(currentPath.current);
@@ -265,6 +322,10 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                     currentPath.current = null;
                     setCurrentPathState(null);
                 }
+
+                // Reset tracking for next stroke
+                lastValidPosition.current = null;
+                previousPoint.current = null;
             },
         })
     ).current;

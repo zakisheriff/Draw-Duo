@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
-import { Download, Eraser, Eye, Minus, Plus, Redo2, Trash2, Undo2 } from 'lucide-react-native';
+import { Download, Eraser, Image, Minus, Plus, Redo2, Trash2, Undo2 } from 'lucide-react-native';
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Colors } from '../constants/Colors';
 import SafeColorPicker from './SafeColorPicker';
 
@@ -16,6 +16,8 @@ interface ToolBarProps {
     isEyedropperActive: boolean;
     onToggleEyedropper: () => void;
     onExport?: () => void;
+    onToggleReferenceImage?: () => void;
+    isReferenceImageActive?: boolean;
 }
 
 // Comic-style tool button with haptics
@@ -23,7 +25,7 @@ function ToolButton({
     onPress,
     isActive,
     children,
-    color = Colors.spiderRed
+    color = '#00D4FF'
 }: {
     onPress: () => void;
     isActive?: boolean;
@@ -90,7 +92,9 @@ export default function ToolBar({
     onRedo,
     isEyedropperActive,
     onToggleEyedropper,
-    onExport
+    onExport,
+    onToggleReferenceImage,
+    isReferenceImageActive
 }: ToolBarProps) {
     const [showColorPicker, setShowColorPicker] = useState(false);
 
@@ -117,20 +121,13 @@ export default function ToolBar({
             {/* Tools Row */}
             <View style={styles.toolsRow}>
                 <ToolButton onPress={onUndo}>
-                    <Undo2 color="black" size={20} />
+                    <Undo2 color="white" size={20} />
                 </ToolButton>
 
                 <ToolButton onPress={onRedo}>
-                    <Redo2 color="black" size={20} />
+                    <Redo2 color="white" size={20} />
                 </ToolButton>
 
-                <ToolButton
-                    onPress={onToggleEyedropper}
-                    isActive={isEyedropperActive}
-                    color={Colors.spiderBlue}
-                >
-                    <Eye color="black" size={20} />
-                </ToolButton>
 
                 {/* Stroke width control */}
                 <View style={styles.strokeControl}>
@@ -138,7 +135,7 @@ export default function ToolBar({
                         style={styles.strokeBtn}
                         onPress={() => onSelectStrokeWidth(Math.max(2, strokeWidth - 3))}
                     >
-                        <Minus color="black" size={16} />
+                        <Minus color="white" size={16} />
                     </TouchableOpacity>
                     <View style={styles.strokePreview}>
                         <View style={[styles.strokeDot, {
@@ -151,17 +148,27 @@ export default function ToolBar({
                         style={styles.strokeBtn}
                         onPress={() => onSelectStrokeWidth(Math.min(30, strokeWidth + 3))}
                     >
-                        <Plus color="black" size={16} />
+                        <Plus color="white" size={16} />
                     </TouchableOpacity>
                 </View>
 
                 <ToolButton onPress={onClear} color={Colors.actionRed || Colors.spiderRed}>
-                    <Trash2 color="black" size={20} />
+                    <Trash2 color="white" size={20} />
                 </ToolButton>
+
+                {onToggleReferenceImage && (
+                    <ToolButton
+                        onPress={onToggleReferenceImage}
+                        isActive={isReferenceImageActive}
+                        color={Colors.spiderViolet}
+                    >
+                        <Image color="white" size={20} />
+                    </ToolButton>
+                )}
 
                 {onExport && (
                     <ToolButton onPress={onExport} color={Colors.spiderBlue}>
-                        <Download color="black" size={20} />
+                        <Download color="white" size={20} />
                     </ToolButton>
                 )}
             </View>
@@ -189,7 +196,12 @@ export default function ToolBar({
             </View>
 
             {/* Color Picker Modal */}
-            {showColorPicker && (
+            <Modal
+                visible={showColorPicker}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setShowColorPicker(false)}
+            >
                 <View style={styles.modalOverlay}>
                     <View style={styles.pickerContent}>
                         <Text style={styles.pickerTitle}>PICK YOUR COLOR!</Text>
@@ -197,10 +209,14 @@ export default function ToolBar({
                             selectedColor={selectedColor}
                             onSelectColor={onSelectColor}
                             onClose={() => setShowColorPicker(false)}
+                            onActivateEyedropper={() => {
+                                setShowColorPicker(false);
+                                onToggleEyedropper();
+                            }}
                         />
                     </View>
                 </View>
-            )}
+            </Modal>
         </View>
     );
 }
@@ -213,7 +229,11 @@ const styles = StyleSheet.create({
         zIndex: 2000,
         elevation: 20,
         borderTopWidth: 4,
-        borderTopColor: Colors.spiderRed,
+        borderTopColor: '#FF2D95',
+        shadowColor: '#00D4FF',
+        shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 0.4,
+        shadowRadius: 8,
     },
     headerAccent: {
         flexDirection: 'row',
@@ -240,15 +260,15 @@ const styles = StyleSheet.create({
         left: 3,
         right: -3,
         bottom: -3,
-        backgroundColor: Colors.spiderBlue,
+        backgroundColor: '#FF2D95',
         borderRadius: 4,
     },
     toolBtnContent: {
         flex: 1,
-        backgroundColor: Colors.spiderRed,
+        backgroundColor: '#0A0A12',
         borderRadius: 4,
-        borderWidth: 3,
-        borderColor: 'black',
+        borderWidth: 2,
+        borderColor: '#00D4FF',
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -258,10 +278,10 @@ const styles = StyleSheet.create({
     strokeControl: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: Colors.spiderYellow,
+        backgroundColor: '#0A0A12',
         borderRadius: 4,
-        borderWidth: 3,
-        borderColor: 'black',
+        borderWidth: 2,
+        borderColor: '#00D4FF',
         paddingHorizontal: 6,
         height: 46,
     },
@@ -328,18 +348,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     modalOverlay: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        top: -1000,
+        flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
         backgroundColor: 'rgba(0,0,0,0.9)',
-        zIndex: 5000,
     },
     pickerContent: {
         width: '85%',
+        maxHeight: '80%',
         backgroundColor: '#222',
         padding: 20,
         borderRadius: 4,
@@ -350,13 +366,17 @@ const styles = StyleSheet.create({
         shadowOpacity: 1,
         shadowRadius: 0,
     },
+    pickerScrollContent: {
+        alignItems: 'center',
+        paddingBottom: 10,
+    },
     pickerTitle: {
         fontFamily: 'Bangers_400Regular',
         fontSize: 24,
-        color: 'white',
+        color: '#00D4FF',
         textAlign: 'center',
         marginBottom: 15,
-        textShadowColor: Colors.spiderRed,
+        textShadowColor: '#FF2D95',
         textShadowOffset: { width: 2, height: 2 },
         textShadowRadius: 0,
     },

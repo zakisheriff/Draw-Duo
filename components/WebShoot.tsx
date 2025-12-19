@@ -17,7 +17,7 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const AnimatedLine = Animated.createAnimatedComponent(Line);
 
 interface WebShootProps {
-    id: number;
+    id: string;
     targetX: number;
     targetY: number;
     onComplete: () => void;

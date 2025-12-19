@@ -25,6 +25,9 @@ const io = new Server(server, {
 // Store room data: roomId -> { strokes: [], users: {} }
 const rooms = {};
 
+// VS Mode rooms: vsRoomId -> { users: {}, submissions: {}, challengeImage: null, gameState: 'waiting' }
+const vsRooms = {};
+
 const PORT = process.env.PORT || 3000;
 
 
@@ -108,6 +111,16 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('clear-canvas');
     });
 
+    // Reference image sync - broadcast to all other users in room (base64 data)
+    socket.on('reference-image-update', ({ roomId, imageData, opacity }) => {
+        socket.to(roomId).emit('reference-image-update', { imageData, opacity });
+    });
+
+    // Live opacity sync - broadcast opacity changes without resending image
+    socket.on('reference-opacity-update', ({ roomId, opacity }) => {
+        socket.to(roomId).emit('reference-opacity-update', { opacity });
+    });
+
     // Chat messages
     socket.on('send-message', ({ roomId, message, userId, timestamp }) => {
         const msgData = { message, userId, timestamp };
@@ -130,6 +143,16 @@ io.on('connection', (socket) => {
         callback(exists);
     });
 
+    // Check if VS room exists
+    socket.on('check-vs-room', (roomId, callback) => {
+        const vsRoomId = `vs-${roomId}`;
+        const hasVsRoom = vsRooms[vsRoomId] !== undefined;
+        const socketRoomSize = io.sockets.adapter.rooms.get(vsRoomId)?.size || 0;
+        const exists = hasVsRoom || socketRoomSize > 0;
+        console.log(`Check VS room ${roomId}: vsRoomId=${vsRoomId}, hasVsRoom=${hasVsRoom}, socketRoomSize=${socketRoomSize}, exists=${exists}`);
+        callback(exists);
+    });
+
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
 
@@ -146,6 +169,104 @@ io.on('connection', (socket) => {
             if (Object.keys(rooms[currentRoom].users).length === 0) {
                 delete rooms[currentRoom];
                 console.log(`Room ${currentRoom} deleted (empty)`);
+            }
+        }
+
+        // Clean up VS rooms
+        if (currentRoom && vsRooms[currentRoom]) {
+            delete vsRooms[currentRoom].users[socket.id];
+            if (Object.keys(vsRooms[currentRoom].users).length === 0) {
+                delete vsRooms[currentRoom];
+                console.log(`VS Room ${currentRoom} deleted (empty)`);
+            }
+        }
+    });
+
+    // ============ VS MODE HANDLERS ============
+
+    // VS Room data structure
+    // vsRooms[roomId] = { users: {}, submissions: {}, challengeImage: null, gameState: 'waiting' }
+
+    socket.on('join-vs-room', (roomId, odentId) => {
+        const vsRoomId = `vs-${roomId}`;
+        socket.join(vsRoomId);
+        currentRoom = vsRoomId;
+        currentUserId = odentId;
+
+        if (!vsRooms[vsRoomId]) {
+            vsRooms[vsRoomId] = {
+                users: {},
+                submissions: {},
+                challengeImage: null,
+                gameState: 'waiting',
+                readyUsers: []
+            };
+        }
+
+        vsRooms[vsRoomId].users[socket.id] = odentId;
+        console.log(`VS: User ${odentId} joined room ${vsRoomId}`);
+
+        // If 2 players, notify both about opponent
+        const userIds = Object.values(vsRooms[vsRoomId].users);
+        if (userIds.length === 2) {
+            const opponent = userIds.find(u => u !== odentId);
+            socket.emit('vs-opponent-joined', { opponentId: opponent });
+            socket.to(vsRoomId).emit('vs-opponent-joined', { opponentId: odentId });
+
+            // Auto-start game when 2 players join
+            const challengeImages = [
+                'https://img.icons8.com/emoji/200/cat-emoji.png',
+                'https://img.icons8.com/emoji/200/dog-face.png',
+                'https://img.icons8.com/emoji/200/sun-with-face.png',
+                'https://img.icons8.com/emoji/200/rocket-emji.png',
+                'https://img.icons8.com/emoji/200/house.png',
+            ];
+            const challengeImage = challengeImages[Math.floor(Math.random() * challengeImages.length)];
+            vsRooms[vsRoomId].challengeImage = challengeImage;
+            vsRooms[vsRoomId].gameState = 'playing';
+
+            io.to(vsRoomId).emit('vs-game-start', { challengeImage });
+        }
+    });
+
+    socket.on('vs-ready', ({ roomId }) => {
+        const vsRoomId = `vs-${roomId}`;
+        if (vsRooms[vsRoomId]) {
+            vsRooms[vsRoomId].submissions = {};
+            vsRooms[vsRoomId].gameState = 'waiting';
+
+            // Trigger new game if both ready
+            const userCount = Object.keys(vsRooms[vsRoomId].users).length;
+            if (userCount >= 2) {
+                const challengeImages = [
+                    'https://img.icons8.com/emoji/200/cat-emoji.png',
+                    'https://img.icons8.com/emoji/200/dog-face.png',
+                    'https://img.icons8.com/emoji/200/sun-with-face.png',
+                ];
+                const challengeImage = challengeImages[Math.floor(Math.random() * challengeImages.length)];
+                vsRooms[vsRoomId].challengeImage = challengeImage;
+                vsRooms[vsRoomId].gameState = 'playing';
+
+                io.to(vsRoomId).emit('vs-game-start', { challengeImage });
+            }
+        }
+    });
+
+    socket.on('vs-submit', ({ roomId, userId, imageUri }) => {
+        const vsRoomId = `vs-${roomId}`;
+        if (vsRooms[vsRoomId]) {
+            vsRooms[vsRoomId].submissions[userId] = imageUri;
+            console.log(`VS: User ${userId} submitted in room ${vsRoomId}`);
+
+            // Notify opponent
+            socket.to(vsRoomId).emit('vs-opponent-submitted');
+
+            // Check if both submitted
+            const submissions = vsRooms[vsRoomId].submissions;
+            const userCount = Object.keys(vsRooms[vsRoomId].users).length;
+            if (Object.keys(submissions).length >= userCount) {
+                vsRooms[vsRoomId].gameState = 'results';
+                io.to(vsRoomId).emit('vs-game-end', { submissions });
             }
         }
     });

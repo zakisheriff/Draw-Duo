@@ -91,8 +91,11 @@ export default function ChatOverlay({ roomId, userId }: ChatProps) {
     }, []);
 
     const sendMessage = (inputText?: string) => {
-        // Use provided text or fall back to ref/state
-        const messageText = (inputText || textRef.current || text).trim();
+        // On Android, prefer React state value over native event text to avoid truncation issues
+        // The native event text can sometimes be incomplete when sent quickly
+        const messageText = Platform.OS === 'android'
+            ? text.trim()
+            : (inputText || textRef.current || text).trim();
         if (!messageText) return;
 
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -113,16 +116,23 @@ export default function ChatOverlay({ roomId, userId }: ChatProps) {
         socketService.emit('send-message', msgData);
         setMessages((prev) => [...prev, { ...msgData, id: Math.random().toString() }]);
 
-        // Clear text after sending
-        setText('');
-        textRef.current = '';
+        // Clear text after sending - use small delay on Android to ensure UI updates properly
+        if (Platform.OS === 'android') {
+            setTimeout(() => {
+                setText('');
+                textRef.current = '';
+            }, 10);
+        } else {
+            setText('');
+            textRef.current = '';
+        }
 
         setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
     };
 
     const handleSubmit = (e: any) => {
-        // Get text directly from native event for Android
-        const nativeText = e?.nativeEvent?.text;
+        // On Android, use state value; on iOS can use native event text
+        const nativeText = Platform.OS === 'android' ? text : e?.nativeEvent?.text;
         sendMessage(nativeText);
     };
 
