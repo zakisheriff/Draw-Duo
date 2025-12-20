@@ -1,14 +1,16 @@
 import ChatOverlay from '@/components/ChatOverlay';
 import CustomToast from '@/components/CustomToast';
-import DrawingCanvas, { CanvasRef } from '@/components/DrawingCanvas';
+import DrawingCanvas, { BrushConfig, CanvasRef, ShapeMode } from '@/components/DrawingCanvas';
+import DrawingTools, { BRUSH_CONFIGS, ToolSettings } from '@/components/DrawingTools';
 import ReferenceImageOverlay from '@/components/ReferenceImageOverlay';
 import SpiderAlert from '@/components/SpiderAlert';
 import ToolBar from '@/components/ToolBar';
 import { Colors } from '@/constants/Colors';
 import socketService from '@/services/socket';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { X } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
-import { Image, Platform, StyleSheet, Text, View } from 'react-native';
+import { BackHandler, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, { FadeInDown, FadeInUp, SlideInRight, SlideOutRight } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -21,6 +23,22 @@ export default function RoomScreen() {
     const [toast, setToast] = useState({ visible: false, message: '', type: 'success' as 'error' | 'success' });
     const [showClearAlert, setShowClearAlert] = useState(false);
     const [showReferencePanel, setShowReferencePanel] = useState(false);
+    const [showDrawingTools, setShowDrawingTools] = useState(false);
+    const [showExitAlert, setShowExitAlert] = useState(false);
+    const router = useRouter();
+
+    // Tool settings state
+    const [toolSettings, setToolSettings] = useState<ToolSettings>({
+        currentTool: 'brush',
+        brushType: 'pen',
+        shapeType: 'line',
+        brushSize: 5,
+        brushOpacity: 1.0,
+        eraserSize: 20,
+    });
+
+    // Get current brush config based on tool settings
+    const currentBrushConfig: BrushConfig = BRUSH_CONFIGS[toolSettings.brushType];
 
     // Reference image state - synced across devices (base64 data)
     const [referenceImageData, setReferenceImageData] = useState<string | null>(null);
@@ -37,6 +55,15 @@ export default function RoomScreen() {
     const showToast = (message: string, type: 'error' | 'success' = 'success') => {
         setToast({ visible: true, message, type });
     };
+
+    // Handle Android back button - show exit confirmation
+    useEffect(() => {
+        const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+            setShowExitAlert(true);
+            return true; // Prevent default back behavior
+        });
+        return () => backHandler.remove();
+    }, []);
 
     useEffect(() => {
         socketService.connect();
@@ -137,7 +164,10 @@ export default function RoomScreen() {
 
     return (
         <SafeAreaView style={styles.container}>
-            <Stack.Screen options={{ headerShown: false }} />
+            <Stack.Screen options={{
+                headerShown: false,
+                gestureEnabled: false, // Prevent iOS swipe back
+            }} />
 
             <CustomToast
                 visible={toast.visible}
@@ -148,6 +178,14 @@ export default function RoomScreen() {
 
             {/* Header - Comic Panel Style */}
             <Animated.View entering={FadeInDown.duration(500)} style={styles.header}>
+                {/* Exit Button */}
+                <TouchableOpacity
+                    style={styles.exitButton}
+                    onPress={() => setShowExitAlert(true)}
+                >
+                    <X color="white" size={24} />
+                </TouchableOpacity>
+
                 {/* Room Code Badge */}
                 <View style={[styles.headerBadge, { transform: [{ rotate: '-3deg' }], backgroundColor: Colors.spiderRed }]}>
                     <Text style={styles.badgeLabel}>ROOM CODE</Text>
@@ -200,13 +238,16 @@ export default function RoomScreen() {
                         ref={canvasRef}
                         roomId={id}
                         color={color}
-                        strokeWidth={strokeWidth}
+                        strokeWidth={toolSettings.currentTool === 'eraser' ? toolSettings.eraserSize : toolSettings.brushSize}
                         userId={userId}
-                        isEraser={isEraser}
+                        isEraser={toolSettings.currentTool === 'eraser'}
+                        brushConfig={currentBrushConfig}
+                        shapeMode={toolSettings.currentTool === 'shape' ? toolSettings.shapeType as ShapeMode : 'none'}
+                        isFillMode={toolSettings.currentTool === 'fill'}
                         onColorPicked={(c) => {
                             setColor(c);
                             setIsEyedropper(false);
-                            setIsEraser(false);
+                            setToolSettings(prev => ({ ...prev, currentTool: 'brush' }));
                         }}
                     />
                 </View>
@@ -243,8 +284,8 @@ export default function RoomScreen() {
             <ToolBar
                 selectedColor={color}
                 onSelectColor={handleColorSelect}
-                strokeWidth={strokeWidth}
-                onSelectStrokeWidth={setStrokeWidth}
+                strokeWidth={toolSettings.brushSize}
+                onSelectStrokeWidth={(w) => setToolSettings(prev => ({ ...prev, brushSize: w }))}
                 onClear={handleClear}
                 onUndo={() => canvasRef.current?.undo()}
                 onRedo={() => canvasRef.current?.redo()}
@@ -256,7 +297,18 @@ export default function RoomScreen() {
                 onExport={handleExport}
                 onToggleReferenceImage={() => setShowReferencePanel((p: boolean) => !p)}
                 isReferenceImageActive={showReferencePanel || !!referenceImageData}
+                onToggleTools={() => setShowDrawingTools((p: boolean) => !p)}
+                isToolsActive={showDrawingTools}
             />
+
+            {/* Drawing Tools Panel */}
+            {showDrawingTools && (
+                <DrawingTools
+                    settings={toolSettings}
+                    onSettingsChange={(updates: Partial<ToolSettings>) => setToolSettings(prev => ({ ...prev, ...updates }))}
+                    selectedColor={color}
+                />
+            )}
 
             {/* Spider-Verse Clear Confirmation */}
             <SpiderAlert
@@ -267,6 +319,22 @@ export default function RoomScreen() {
                 onConfirm={confirmClear}
                 cancelText="NAH"
                 confirmText="CLEAR IT"
+                type="danger"
+            />
+
+            {/* Exit Confirmation */}
+            <SpiderAlert
+                visible={showExitAlert}
+                title="🚪 LEAVE ROOM?"
+                message="Are you sure you want to leave this drawing session?"
+                onCancel={() => setShowExitAlert(false)}
+                onConfirm={() => {
+                    setShowExitAlert(false);
+                    socketService.disconnect();
+                    router.back();
+                }}
+                cancelText="STAY"
+                confirmText="LEAVE"
                 type="danger"
             />
         </SafeAreaView>
@@ -289,6 +357,16 @@ const styles = StyleSheet.create({
         borderBottomWidth: 4,
         borderBottomColor: Colors.spiderRed,
         zIndex: 10,
+    },
+    exitButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(255, 45, 149, 0.8)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 2,
+        borderColor: 'white',
     },
     headerBadge: {
         padding: 6,

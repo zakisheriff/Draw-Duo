@@ -9,12 +9,28 @@ import socketService from '../services/socket';
 const VIRTUAL_WIDTH = 1000;
 const VIRTUAL_HEIGHT = 1000;
 
+// Brush configuration type
+export interface BrushConfig {
+    strokeCap: 'round' | 'butt' | 'square';
+    strokeJoin: 'round' | 'bevel' | 'miter';
+    opacity: number;
+}
+
+// Default brush config (pen)
+const DEFAULT_BRUSH_CONFIG: BrushConfig = {
+    strokeCap: 'round',
+    strokeJoin: 'round',
+    opacity: 1.0,
+};
+
 interface Stroke {
     path: SkPath;
     color: string;
     strokeWidth: number;
     userId?: string;
     isEraser?: boolean;
+    brushConfig?: BrushConfig;
+    fillColor?: string; // For filled shapes
 }
 
 export interface CanvasRef {
@@ -28,16 +44,22 @@ export interface CanvasRef {
     redoCount: number;
 }
 
+// Shape types
+export type ShapeMode = 'none' | 'line' | 'rectangle' | 'circle' | 'triangle';
+
 interface CanvasProps {
     roomId: string;
     color: string;
     strokeWidth: number;
     userId: string;
     isEraser?: boolean;
+    brushConfig?: BrushConfig;
+    shapeMode?: ShapeMode;
+    isFillMode?: boolean;
     onColorPicked?: (color: string) => void;
 }
 
-const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strokeWidth, userId, isEraser = false, onColorPicked }, ref) => {
+const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strokeWidth, userId, isEraser = false, brushConfig = DEFAULT_BRUSH_CONFIG, shapeMode = 'none', isFillMode = false, onColorPicked }, ref) => {
     const [paths, setPaths] = useState<Stroke[]>([]);
     const [redoStack, setRedoStack] = useState<Stroke[]>([]);
     const [currentPathState, setCurrentPathState] = useState<SkPath | null>(null);
@@ -56,10 +78,14 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
     const strokeWidthRef = useRef(strokeWidth);
     const isEyedropperActiveRef = useRef(isEyedropperActive);
     const isEraserRef = useRef(isEraser);
+    const brushConfigRef = useRef(brushConfig);
     const pathsRef = useRef(paths);
     const canvasSizeRef = useRef(canvasSize);
     const lastValidPosition = useRef<{ x: number; y: number } | null>(null);
     const previousPoint = useRef<{ x: number; y: number } | null>(null);
+    const shapeStartPoint = useRef<{ x: number; y: number } | null>(null);
+    const shapeModeRef = useRef(shapeMode);
+    const isFillModeRef = useRef(isFillMode);
 
     // Maximum allowed distance between consecutive points (to detect jumps)
     const MAX_JUMP_DISTANCE = 80;
@@ -68,8 +94,50 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
     useEffect(() => { strokeWidthRef.current = strokeWidth; }, [strokeWidth]);
     useEffect(() => { isEyedropperActiveRef.current = isEyedropperActive; }, [isEyedropperActive]);
     useEffect(() => { isEraserRef.current = isEraser; }, [isEraser]);
+    useEffect(() => { brushConfigRef.current = brushConfig; }, [brushConfig]);
+    useEffect(() => { shapeModeRef.current = shapeMode; }, [shapeMode]);
+    useEffect(() => { isFillModeRef.current = isFillMode; }, [isFillMode]);
     useEffect(() => { pathsRef.current = paths; }, [paths]);
     useEffect(() => { canvasSizeRef.current = canvasSize; }, [canvasSize]);
+
+    // Shape path creation utilities
+    const createShapePath = (start: { x: number; y: number }, end: { x: number; y: number }, mode: ShapeMode): SkPath | null => {
+        const path = Skia.Path.Make();
+
+        switch (mode) {
+            case 'line':
+                path.moveTo(start.x, start.y);
+                path.lineTo(end.x, end.y);
+                break;
+            case 'rectangle':
+                path.moveTo(start.x, start.y);
+                path.lineTo(end.x, start.y);
+                path.lineTo(end.x, end.y);
+                path.lineTo(start.x, end.y);
+                path.close();
+                break;
+            case 'circle': {
+                const centerX = (start.x + end.x) / 2;
+                const centerY = (start.y + end.y) / 2;
+                const radiusX = Math.abs(end.x - start.x) / 2;
+                const radiusY = Math.abs(end.y - start.y) / 2;
+                path.addOval({ x: centerX - radiusX, y: centerY - radiusY, width: radiusX * 2, height: radiusY * 2 });
+                break;
+            }
+            case 'triangle': {
+                const midTopX = (start.x + end.x) / 2;
+                path.moveTo(midTopX, start.y);
+                path.lineTo(end.x, end.y);
+                path.lineTo(start.x, end.y);
+                path.close();
+                break;
+            }
+            default:
+                return null;
+        }
+
+        return path;
+    };
 
     // Scale SVG path string from normalized to local
     const scalePathToLocal = (svgPath: string): SkPath | null => {
@@ -228,6 +296,30 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                     return;
                 }
 
+                // Fill mode: tap to fill closed shapes with current color
+                if (isFillModeRef.current) {
+                    const { locationX, locationY } = evt.nativeEvent;
+                    const allPaths = pathsRef.current;
+                    for (let i = allPaths.length - 1; i >= 0; i--) {
+                        const p = allPaths[i];
+                        // Check if tap is inside this path
+                        if (p.path.contains(locationX, locationY)) {
+                            // Create updated stroke with fill color (fills inside of closed shapes)
+                            const updatedPath = {
+                                ...p,
+                                fillColor: colorRef.current,
+                            };
+                            // Update paths - add fill to the tapped path
+                            setPaths(prev => prev.map((path, idx) =>
+                                idx === i ? updatedPath : path
+                            ));
+                            return;
+                        }
+                    }
+                    // Always return in fill mode - don't start drawing
+                    return;
+                }
+
                 let { locationX, locationY } = evt.nativeEvent;
                 const { width, height } = canvasSizeRef.current;
 
@@ -235,6 +327,13 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                 locationX = Math.max(0, Math.min(locationX, width));
                 locationY = Math.max(0, Math.min(locationY, height));
 
+                // Shape mode: store start point
+                if (shapeModeRef.current !== 'none') {
+                    shapeStartPoint.current = { x: locationX, y: locationY };
+                    return;
+                }
+
+                // Freehand mode
                 const newPath = Skia.Path.Make();
                 newPath.moveTo(locationX, locationY);
                 currentPath.current = newPath;
@@ -245,6 +344,7 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
             },
             onPanResponderMove: (evt: GestureResponderEvent) => {
                 if (isEyedropperActiveRef.current) return;
+                if (isFillModeRef.current) return; // No drawing in fill mode
 
                 let { locationX, locationY } = evt.nativeEvent;
                 const { width, height } = canvasSizeRef.current;
@@ -253,6 +353,20 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                 locationX = Math.max(0, Math.min(locationX, width));
                 locationY = Math.max(0, Math.min(locationY, height));
 
+                // Shape mode: create preview shape
+                if (shapeModeRef.current !== 'none' && shapeStartPoint.current) {
+                    const shapePath = createShapePath(
+                        shapeStartPoint.current,
+                        { x: locationX, y: locationY },
+                        shapeModeRef.current
+                    );
+                    if (shapePath) {
+                        setCurrentPathState(shapePath);
+                    }
+                    return;
+                }
+
+                // Freehand mode
                 // Check for sudden jumps (Android edge bug)
                 if (lastValidPosition.current) {
                     const dx = Math.abs(locationX - lastValidPosition.current.x);
@@ -291,9 +405,51 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                     });
                 }
             },
-            onPanResponderRelease: () => {
+            onPanResponderRelease: (evt: GestureResponderEvent) => {
                 if (isEyedropperActiveRef.current) return;
 
+                // Shape mode: finalize the shape
+                if (shapeModeRef.current !== 'none' && shapeStartPoint.current) {
+                    let { locationX, locationY } = evt.nativeEvent;
+                    const { width, height } = canvasSizeRef.current;
+                    locationX = Math.max(0, Math.min(locationX, width));
+                    locationY = Math.max(0, Math.min(locationY, height));
+
+                    const shapePath = createShapePath(
+                        shapeStartPoint.current,
+                        { x: locationX, y: locationY },
+                        shapeModeRef.current
+                    );
+
+                    if (shapePath) {
+                        const normalizedPath = scalePathToNormalized(shapePath);
+                        const strokeData: Stroke = {
+                            path: shapePath,
+                            color: colorRef.current,
+                            strokeWidth: strokeWidthRef.current,
+                            userId,
+                            isEraser: false,
+                            brushConfig: brushConfigRef.current,
+                        };
+
+                        setPaths(prev => [...prev, strokeData]);
+                        setRedoStack([]);
+
+                        socketService.emit('draw-stroke', {
+                            roomId,
+                            path: normalizedPath,
+                            color: colorRef.current,
+                            strokeWidth: strokeWidthRef.current,
+                            isEraser: false
+                        });
+                    }
+
+                    shapeStartPoint.current = null;
+                    setCurrentPathState(null);
+                    return;
+                }
+
+                // Freehand mode
                 if (currentPath.current) {
                     const normalizedPath = scalePathToNormalized(currentPath.current);
                     const currentColor = colorRef.current;
@@ -305,7 +461,8 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                         color: currentColor,
                         strokeWidth: currentStrokeWidth,
                         userId,
-                        isEraser: currentIsEraser
+                        isEraser: currentIsEraser,
+                        brushConfig: brushConfigRef.current,
                     };
 
                     setPaths(prev => [...prev, strokeData]);
@@ -418,17 +575,31 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
             <View ref={canvasWrapperRef} style={styles.canvasWrapper} collapsable={false}>
                 <Canvas style={styles.canvas}>
                     {/* Permanent Paths */}
-                    {paths.map((p, index) => (
-                        <Path
-                            key={index}
-                            path={p.path}
-                            color={p.isEraser ? eraserColor : p.color}
-                            style="stroke"
-                            strokeWidth={p.isEraser ? p.strokeWidth * 2 : p.strokeWidth}
-                            strokeJoin="round"
-                            strokeCap="round"
-                        />
-                    ))}
+                    {paths.map((p, index) => {
+                        const config = p.brushConfig || DEFAULT_BRUSH_CONFIG;
+                        return (
+                            <React.Fragment key={index}>
+                                {/* Fill layer - rendered first (behind stroke) */}
+                                {p.fillColor && (
+                                    <Path
+                                        path={p.path}
+                                        color={p.fillColor}
+                                        style="fill"
+                                    />
+                                )}
+                                {/* Stroke layer - rendered on top of fill */}
+                                <Path
+                                    path={p.path}
+                                    color={p.isEraser ? eraserColor : p.color}
+                                    style="stroke"
+                                    strokeWidth={p.isEraser ? p.strokeWidth * 2 : p.strokeWidth}
+                                    strokeJoin={config.strokeJoin}
+                                    strokeCap={config.strokeCap}
+                                    opacity={p.isEraser ? 1 : config.opacity}
+                                />
+                            </React.Fragment>
+                        );
+                    })}
 
                     {/* Remote Live Paths */}
                     {Object.entries(remotePaths).map(([uid, p]) => (
@@ -450,8 +621,9 @@ const DrawingCanvas = forwardRef<CanvasRef, CanvasProps>(({ roomId, color, strok
                             color={isEraser ? eraserColor : color}
                             style="stroke"
                             strokeWidth={isEraser ? strokeWidth * 2 : strokeWidth}
-                            strokeJoin="round"
-                            strokeCap="round"
+                            strokeJoin={brushConfig.strokeJoin}
+                            strokeCap={brushConfig.strokeCap}
+                            opacity={isEraser ? 1 : brushConfig.opacity}
                         />
                     )}
                 </Canvas>

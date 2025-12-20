@@ -1,6 +1,18 @@
+import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Pipette } from 'lucide-react-native';
-import React, { useState } from 'react';
-import { Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import {
+    Dimensions,
+    Platform,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
+} from 'react-native';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface SafeColorPickerProps {
     selectedColor: string;
@@ -9,145 +21,283 @@ interface SafeColorPickerProps {
     onActivateEyedropper?: () => void;
 }
 
-// MASSIVE color palette - 200+ colors organized by hue
-const COLORS = {
-    reds: [
-        '#FF0000', '#FF1A1A', '#FF3333', '#FF4D4D', '#FF6666', '#FF8080', '#FF9999', '#FFB3B3',
-        '#E60000', '#CC0000', '#B30000', '#990000', '#800000', '#660000', '#4D0000', '#330000',
-    ],
-    oranges: [
-        '#FF7F00', '#FF8C00', '#FF9900', '#FFA500', '#FFB347', '#FFCC66', '#FFD580', '#FFE0B3',
-        '#E67300', '#CC6600', '#B35900', '#994D00', '#804000', '#663300', '#4D2600', '#331A00',
-    ],
-    yellows: [
-        '#FFFF00', '#FFFF33', '#FFFF66', '#FFFF99', '#FFFFCC', '#FFEB3B', '#FDD835', '#FBC02D',
-        '#F9A825', '#F57F17', '#FFD700', '#FFC107', '#FFB300', '#FFA000', '#FF8F00', '#FF6F00',
-    ],
-    greens: [
-        '#00FF00', '#33FF33', '#66FF66', '#99FF99', '#CCFFCC', '#00CC00', '#009900', '#006600',
-        '#00FF7F', '#00FA9A', '#2ECC71', '#27AE60', '#1ABC9C', '#16A085', '#00E676', '#00C853',
-        '#4CAF50', '#43A047', '#388E3C', '#2E7D32', '#1B5E20', '#81C784', '#A5D6A7', '#C8E6C9',
-    ],
-    cyans: [
-        '#00FFFF', '#33FFFF', '#66FFFF', '#99FFFF', '#CCFFFF', '#00CED1', '#00BCD4', '#00ACC1',
-        '#0097A7', '#00838F', '#006064', '#20C997', '#17A2B8', '#00D4FF', '#00E5FF', '#18FFFF',
-    ],
-    blues: [
-        '#0000FF', '#1A1AFF', '#3333FF', '#4D4DFF', '#6666FF', '#8080FF', '#9999FF', '#B3B3FF',
-        '#0066FF', '#0099FF', '#00BFFF', '#3498DB', '#2980B9', '#1E88E5', '#1976D2', '#1565C0',
-        '#0D47A1', '#0A47A1', '#001F3F', '#003366', '#004080', '#0059B3', '#0073E6', '#1A8CFF',
-    ],
-    purples: [
-        '#8B00FF', '#9B30FF', '#A020F0', '#9932CC', '#9400D3', '#8A2BE2', '#7B68EE', '#6A5ACD',
-        '#9B59B6', '#8E44AD', '#7D3C98', '#6C3483', '#5B2C6F', '#4A235A', '#9C27B0', '#8E24AA',
-        '#7B1FA2', '#6A1B9A', '#4A148C', '#AA00FF', '#D500F9', '#E040FB', '#EA80FC', '#CE93D8',
-    ],
-    pinks: [
-        '#FF00FF', '#FF33FF', '#FF66FF', '#FF99FF', '#FFCCFF', '#FF1493', '#FF69B4', '#FFB6C1',
-        '#FF2D95', '#E91E63', '#EC407A', '#F06292', '#F48FB1', '#F8BBD9', '#C2185B', '#AD1457',
-        '#880E4F', '#FCE4EC', '#F8BBD0', '#F48FB1', '#F06292', '#EC407A', '#E91E63', '#D81B60',
-    ],
-    browns: [
-        '#8B4513', '#A0522D', '#CD853F', '#D2691E', '#DEB887', '#F4A460', '#BC8F8F', '#C19A6B',
-        '#795548', '#6D4C41', '#5D4037', '#4E342E', '#3E2723', '#A1887F', '#8D6E63', '#BCAAA4',
-    ],
-    grays: [
-        '#FFFFFF', '#F8F9FA', '#F5F5F5', '#EEEEEE', '#E0E0E0', '#BDBDBD', '#9E9E9E', '#757575',
-        '#616161', '#424242', '#212121', '#1A1A2E', '#0A0A12', '#111111', '#0D0D0D', '#000000',
-    ],
-};
+// Dimensions
+const PICKER_SIZE = Platform.OS === 'android' ? Math.min(SCREEN_WIDTH - 100, 220) : Math.min(SCREEN_WIDTH - 80, 280);
+const HUE_SLIDER_HEIGHT = 20;
+const CURSOR_SIZE = 22;
 
-// Flatten for grid display
-const ALL_COLORS = [
-    ...COLORS.reds, ...COLORS.oranges, ...COLORS.yellows, ...COLORS.greens,
-    ...COLORS.cyans, ...COLORS.blues, ...COLORS.purples, ...COLORS.pinks,
-    ...COLORS.browns, ...COLORS.grays,
-];
+// ============ COLOR CONVERSION UTILITIES ============
 
-export default function SafeColorPicker({ selectedColor, onSelectColor, onClose, onActivateEyedropper }: SafeColorPickerProps) {
-    const [hexInput, setHexInput] = useState(selectedColor || '#FF0000');
-    const [currentColor, setCurrentColor] = useState(selectedColor || '#FF0000');
+function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
+    h = h / 360;
+    s = s / 100;
+    v = v / 100;
 
-    // Handle hex input
-    const handleHexChange = (text: string) => {
-        let hex = text.toUpperCase();
-        if (!hex.startsWith('#')) {
-            hex = '#' + hex;
+    let r = 0, g = 0, b = 0;
+    const i = Math.floor(h * 6);
+    const f = h * 6 - i;
+    const p = v * (1 - s);
+    const q = v * (1 - f * s);
+    const t = v * (1 - (1 - f) * s);
+
+    switch (i % 6) {
+        case 0: r = v; g = t; b = p; break;
+        case 1: r = q; g = v; b = p; break;
+        case 2: r = p; g = v; b = t; break;
+        case 3: r = p; g = q; b = v; break;
+        case 4: r = t; g = p; b = v; break;
+        case 5: r = v; g = p; b = q; break;
+    }
+
+    return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+    const toHex = (n: number) => n.toString(16).padStart(2, '0').toUpperCase();
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? [
+        parseInt(result[1], 16),
+        parseInt(result[2], 16),
+        parseInt(result[3], 16)
+    ] : [0, 0, 0];
+}
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0;
+    const l = (max + min) / 2;
+
+    if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+            case g: h = ((b - r) / d + 2) / 6; break;
+            case b: h = ((r - g) / d + 4) / 6; break;
         }
-        setHexInput(hex);
+    }
 
-        // Validate and apply if valid hex
-        if (/^#[0-9A-F]{6}$/i.test(hex)) {
-            setCurrentColor(hex);
-            onSelectColor(hex);
+    return [Math.round(h * 360), Math.round(s * 100), Math.round(l * 100)];
+}
+
+function hueToColor(hue: number): string {
+    const [r, g, b] = hsvToRgb(hue, 100, 100);
+    return rgbToHex(r, g, b);
+}
+
+// ============ MAIN COMPONENT ============
+
+export default function SafeColorPicker({
+    selectedColor,
+    onSelectColor,
+    onClose,
+    onActivateEyedropper
+}: SafeColorPickerProps) {
+    // HSV State
+    const [hue, setHue] = useState(0);
+    const [saturation, setSaturation] = useState(100);
+    const [brightness, setBrightness] = useState(100);
+
+    // Derived values
+    const [rgb, setRgb] = useState<[number, number, number]>([255, 0, 0]);
+    const [hex, setHex] = useState('#FF0000');
+    const [hsl, setHsl] = useState<[number, number, number]>([0, 100, 50]);
+
+    // Refs for touch handling
+    const squareRef = useRef<View>(null);
+    const hueRef = useRef<View>(null);
+    const lastHapticTime = useRef(0);
+
+    // Update all color values from HSV
+    const updateColors = (h: number, s: number, v: number) => {
+        const newRgb = hsvToRgb(h, s, v);
+        const newHex = rgbToHex(...newRgb);
+        const newHsl = rgbToHsl(...newRgb);
+
+        setRgb(newRgb);
+        setHex(newHex);
+        setHsl(newHsl);
+        onSelectColor(newHex);
+    };
+
+    // Haptic feedback (throttled)
+    const triggerHaptic = () => {
+        const now = Date.now();
+        if (now - lastHapticTime.current > 50) {
+            Haptics.selectionAsync();
+            lastHapticTime.current = now;
         }
     };
 
-    // Handle swatch tap
-    const handleSwatchTap = (color: string) => {
-        setCurrentColor(color);
-        setHexInput(color);
-        onSelectColor(color);
+    // Handle square touch (Saturation/Brightness)
+    const handleSquareTouch = (x: number, y?: number) => {
+        const newSat = Math.max(0, Math.min(100, (x / PICKER_SIZE) * 100));
+        const newBright = Math.max(0, Math.min(100, 100 - ((y ?? 0) / PICKER_SIZE) * 100));
+
+        setSaturation(newSat);
+        setBrightness(newBright);
+        updateColors(hue, newSat, newBright);
     };
 
-    // Handle eyedropper activation
+    // Handle hue slider touch
+    const handleHueTouch = (x: number) => {
+        const newHue = Math.max(0, Math.min(360, (x / PICKER_SIZE) * 360));
+        setHue(newHue);
+        updateColors(newHue, saturation, brightness);
+        triggerHaptic();
+    };
+
+    // Create touch handlers with smooth tracking
+    const createTouchHandler = (handler: (x: number, y?: number) => void, isSquare = false) => ({
+        onStartShouldSetResponder: () => true,
+        onMoveShouldSetResponder: () => true,
+        onResponderGrant: (e: any) => {
+            const { locationX, locationY } = e.nativeEvent;
+            if (isSquare) {
+                handler(locationX, locationY);
+            } else {
+                handler(locationX);
+            }
+        },
+        onResponderMove: (e: any) => {
+            const { locationX, locationY } = e.nativeEvent;
+            if (isSquare) {
+                handler(locationX, locationY);
+            } else {
+                handler(locationX);
+            }
+        },
+        onResponderRelease: () => {
+            // Final update already done in move
+        },
+    });
+
+    // Eyedropper handler
     const handleEyedropper = () => {
-        onClose(); // Close the picker first
+        onClose();
         if (onActivateEyedropper) {
-            onActivateEyedropper(); // Then activate eyedropper mode
+            onActivateEyedropper();
         }
     };
 
-    const isSmall = Platform.OS === 'android';
+    // Current pure hue color for square gradient
+    const pureHueColor = hueToColor(hue);
 
     return (
         <View style={styles.container}>
-            {/* Header: Preview + HEX Input + Eyedropper */}
-            <View style={styles.headerRow}>
-                <View style={[styles.preview, { backgroundColor: currentColor }]} />
+            {/* 2D Color Square - Saturation (X) / Brightness (Y) */}
+            <View
+                ref={squareRef}
+                style={[styles.colorSquare, { width: PICKER_SIZE, height: PICKER_SIZE }]}
+                {...createTouchHandler(handleSquareTouch, true)}
+            >
+                {/* Base Hue Layer */}
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: pureHueColor }]} />
+
+                {/* White to Transparent (Saturation - Left to Right) */}
+                <LinearGradient
+                    colors={['#FFFFFF', 'transparent']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={StyleSheet.absoluteFill}
+                />
+
+                {/* Transparent to Black (Brightness - Top to Bottom) */}
+                <LinearGradient
+                    colors={['transparent', '#000000']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 0, y: 1 }}
+                    style={StyleSheet.absoluteFill}
+                />
+
+                {/* Cursor */}
+                <View
+                    style={[
+                        styles.squareCursor,
+                        {
+                            left: (saturation / 100) * PICKER_SIZE - CURSOR_SIZE / 2,
+                            top: ((100 - brightness) / 100) * PICKER_SIZE - CURSOR_SIZE / 2,
+                        }
+                    ]}
+                >
+                    <View style={[styles.cursorInner, { backgroundColor: hex }]} />
+                </View>
+            </View>
+
+            {/* Hue Slider */}
+            <View
+                ref={hueRef}
+                style={[styles.hueSlider, { width: PICKER_SIZE }]}
+                {...createTouchHandler(handleHueTouch, false)}
+            >
+                <LinearGradient
+                    colors={['#FF0000', '#FFFF00', '#00FF00', '#00FFFF', '#0000FF', '#FF00FF', '#FF0000']}
+                    start={{ x: 0, y: 0.5 }}
+                    end={{ x: 1, y: 0.5 }}
+                    style={styles.hueGradient}
+                />
+                {/* Hue Cursor */}
+                <View
+                    style={[
+                        styles.hueCursor,
+                        { left: (hue / 360) * PICKER_SIZE - 6 }
+                    ]}
+                />
+            </View>
+
+            {/* Color Info Row */}
+            <View style={styles.infoRow}>
+                {/* Color Preview */}
+                <View style={[styles.preview, { backgroundColor: hex }]} />
+
+                {/* HEX Input */}
                 <TextInput
                     style={styles.hexInput}
-                    value={hexInput}
-                    onChangeText={handleHexChange}
-                    placeholder="#FFFFFF"
-                    placeholderTextColor="#666"
+                    value={hex}
+                    onChangeText={(text) => {
+                        // Always update the display text
+                        let formatted = text.toUpperCase();
+                        if (!formatted.startsWith('#')) {
+                            formatted = '#' + formatted;
+                        }
+                        // Limit to 7 chars (#XXXXXX)
+                        formatted = formatted.slice(0, 7);
+                        setHex(formatted);
+
+                        // Only apply color if valid hex
+                        if (/^#[0-9A-F]{6}$/i.test(formatted)) {
+                            const [r, g, b] = hexToRgb(formatted);
+                            setRgb([r, g, b]);
+                            setHsl(rgbToHsl(r, g, b));
+                            onSelectColor(formatted);
+                        }
+                    }}
                     maxLength={7}
                     autoCapitalize="characters"
                     autoCorrect={false}
+                    keyboardType="default"
                 />
+
+                {/* Eyedropper */}
                 {onActivateEyedropper && (
                     <TouchableOpacity style={styles.eyedropperBtn} onPress={handleEyedropper}>
-                        <Pipette color="#00D4FF" size={22} />
+                        <Pipette color="#00D4FF" size={20} />
                     </TouchableOpacity>
                 )}
             </View>
 
-            {onActivateEyedropper && (
-                <Text style={styles.eyedropperHint}>Tap 💧 to pick color from canvas</Text>
-            )}
+            {/* Color Values Display */}
+            <View style={styles.valuesRow}>
+                <Text style={styles.valueText}>RGB({rgb[0]}, {rgb[1]}, {rgb[2]})</Text>
+                <Text style={styles.valueText}>HSL({hsl[0]}°, {hsl[1]}%, {hsl[2]}%)</Text>
+            </View>
 
-            {/* Color Grid */}
-            <ScrollView
-                style={styles.scrollView}
-                showsVerticalScrollIndicator={true}
-                contentContainerStyle={styles.scrollContent}
-            >
-                <View style={styles.grid}>
-                    {ALL_COLORS.map((color, index) => (
-                        <TouchableOpacity
-                            key={`${color}-${index}`}
-                            style={[
-                                styles.swatch,
-                                { backgroundColor: color },
-                                currentColor.toUpperCase() === color.toUpperCase() && styles.selectedSwatch,
-                            ]}
-                            onPress={() => handleSwatchTap(color)}
-                            activeOpacity={0.7}
-                        />
-                    ))}
-                </View>
-            </ScrollView>
-
+            {/* Done Button */}
             <TouchableOpacity style={styles.doneBtn} onPress={onClose}>
                 <Text style={styles.btnText}>DONE</Text>
             </TouchableOpacity>
@@ -155,25 +305,76 @@ export default function SafeColorPicker({ selectedColor, onSelectColor, onClose,
     );
 }
 
-const isSmall = Platform.OS === 'android';
-const SWATCH_SIZE = isSmall ? 28 : 34;
-
 const styles = StyleSheet.create({
     container: {
-        width: '100%',
+        alignItems: 'center',
+        paddingVertical: 8,
+    },
+    colorSquare: {
+        borderRadius: 8,
+        borderWidth: 2,
+        borderColor: '#00D4FF',
+        overflow: 'hidden',
+        position: 'relative',
+    },
+    squareCursor: {
+        position: 'absolute',
+        width: CURSOR_SIZE,
+        height: CURSOR_SIZE,
+        borderRadius: CURSOR_SIZE / 2,
+        borderWidth: 3,
+        borderColor: '#FFFFFF',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.5,
+        shadowRadius: 4,
+        elevation: 5,
+        justifyContent: 'center',
         alignItems: 'center',
     },
-    headerRow: {
+    cursorInner: {
+        width: CURSOR_SIZE - 8,
+        height: CURSOR_SIZE - 8,
+        borderRadius: (CURSOR_SIZE - 8) / 2,
+    },
+    hueSlider: {
+        height: HUE_SLIDER_HEIGHT + 10,
+        marginTop: 12,
+        justifyContent: 'center',
+        position: 'relative',
+    },
+    hueGradient: {
+        height: HUE_SLIDER_HEIGHT,
+        borderRadius: HUE_SLIDER_HEIGHT / 2,
+        borderWidth: 2,
+        borderColor: '#00D4FF',
+    },
+    hueCursor: {
+        position: 'absolute',
+        top: -2,
+        width: 12,
+        height: HUE_SLIDER_HEIGHT + 14,
+        backgroundColor: '#FFF',
+        borderRadius: 4,
+        borderWidth: 2,
+        borderColor: '#333',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.4,
+        shadowRadius: 2,
+        elevation: 3,
+    },
+    infoRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 8,
+        marginTop: 14,
         gap: 10,
     },
     preview: {
-        width: 45,
-        height: 45,
-        borderRadius: 10,
-        borderWidth: 3,
+        width: 44,
+        height: 44,
+        borderRadius: 8,
+        borderWidth: 2,
         borderColor: '#00D4FF',
     },
     hexInput: {
@@ -186,59 +387,34 @@ const styles = StyleSheet.create({
         color: '#00D4FF',
         fontSize: 14,
         fontWeight: 'bold',
-        width: 95,
+        width: 90,
         textAlign: 'center',
-        fontFamily: 'Inter_400Regular',
     },
     eyedropperBtn: {
-        width: 45,
-        height: 45,
-        borderRadius: 10,
+        width: 44,
+        height: 44,
+        borderRadius: 8,
         borderWidth: 2,
         borderColor: '#00D4FF',
         backgroundColor: '#0A0A12',
         justifyContent: 'center',
         alignItems: 'center',
     },
-    eyedropperHint: {
+    valuesRow: {
+        flexDirection: 'row',
+        marginTop: 10,
+        gap: 12,
+    },
+    valueText: {
         color: '#888',
         fontSize: 10,
-        marginBottom: 8,
-        fontStyle: 'italic',
-    },
-    scrollView: {
-        width: '100%',
-        maxHeight: Platform.OS === 'android' ? 180 : 220,
-    },
-    scrollContent: {
-        alignItems: 'center',
-        paddingBottom: 8,
-    },
-    grid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'center',
-        gap: 4,
-        width: '100%',
-        paddingHorizontal: 4,
-    },
-    swatch: {
-        width: SWATCH_SIZE,
-        height: SWATCH_SIZE,
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.2)',
-    },
-    selectedSwatch: {
-        borderColor: '#00D4FF',
-        borderWidth: 3,
-        transform: [{ scale: 1.15 }],
+        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     },
     doneBtn: {
-        marginTop: 10,
+        marginTop: 14,
         backgroundColor: '#0A0A12',
         paddingVertical: Platform.OS === 'android' ? 8 : 10,
-        paddingHorizontal: Platform.OS === 'android' ? 35 : 45,
+        paddingHorizontal: 40,
         borderRadius: 8,
         borderWidth: 2,
         borderColor: '#00D4FF',

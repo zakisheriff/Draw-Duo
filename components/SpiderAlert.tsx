@@ -53,8 +53,8 @@ export default function SpiderAlert({
                 style={styles.overlay}
             >
                 <Animated.View
-                    entering={SlideInUp.springify().damping(15)}
-                    exiting={SlideOutDown.duration(200)}
+                    // entering={SlideInUp.springify().damping(15)}
+                    // exiting={SlideOutDown.duration(200)}
                     style={styles.container}
                 >
                     {/* Comic panel shadow */}

@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
-import { Download, Eraser, Image, Minus, Plus, Redo2, Trash2, Undo2 } from 'lucide-react-native';
+import { Download, Eraser, Image, Minus, Palette, Plus, Redo2, Trash2, Undo2 } from 'lucide-react-native';
 import React, { useState } from 'react';
-import { Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Colors } from '../constants/Colors';
 import SafeColorPicker from './SafeColorPicker';
 
@@ -18,6 +18,8 @@ interface ToolBarProps {
     onExport?: () => void;
     onToggleReferenceImage?: () => void;
     isReferenceImageActive?: boolean;
+    onToggleTools?: () => void;
+    isToolsActive?: boolean;
 }
 
 // Comic-style tool button with haptics
@@ -94,7 +96,9 @@ export default function ToolBar({
     onToggleEyedropper,
     onExport,
     onToggleReferenceImage,
-    isReferenceImageActive
+    isReferenceImageActive,
+    onToggleTools,
+    isToolsActive
 }: ToolBarProps) {
     const [showColorPicker, setShowColorPicker] = useState(false);
 
@@ -118,8 +122,13 @@ export default function ToolBar({
                 <View style={[styles.accentSegment, { backgroundColor: Colors.spiderYellow }]} />
             </View>
 
-            {/* Tools Row */}
-            <View style={styles.toolsRow}>
+            {/* Tools Row - Scrollable */}
+            <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.toolsScrollContent}
+                style={styles.toolsScrollView}
+            >
                 <ToolButton onPress={onUndo}>
                     <Undo2 color="white" size={20} />
                 </ToolButton>
@@ -166,12 +175,22 @@ export default function ToolBar({
                     </ToolButton>
                 )}
 
+                {onToggleTools && (
+                    <ToolButton
+                        onPress={onToggleTools}
+                        isActive={isToolsActive}
+                        color={Colors.spiderViolet || '#9B59B6'}
+                    >
+                        <Palette color="white" size={20} />
+                    </ToolButton>
+                )}
+
                 {onExport && (
                     <ToolButton onPress={onExport} color={Colors.spiderBlue}>
                         <Download color="white" size={20} />
                     </ToolButton>
                 )}
-            </View>
+            </ScrollView>
 
             {/* Colors Row */}
             <View style={styles.colorSection}>
@@ -202,7 +221,10 @@ export default function ToolBar({
                 animationType="fade"
                 onRequestClose={() => setShowColorPicker(false)}
             >
-                <View style={styles.modalOverlay}>
+                <KeyboardAvoidingView
+                    style={styles.modalOverlay}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                >
                     <View style={styles.pickerContent}>
                         <Text style={styles.pickerTitle}>PICK YOUR COLOR!</Text>
                         <SafeColorPicker
@@ -215,7 +237,7 @@ export default function ToolBar({
                             }}
                         />
                     </View>
-                </View>
+                </KeyboardAvoidingView>
             </Modal>
         </View>
     );
@@ -242,12 +264,23 @@ const styles = StyleSheet.create({
     accentSegment: {
         flex: 1,
     },
+    toolsScrollView: {
+        maxHeight: 70,
+    },
+    toolsScrollContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 10,
+        gap: 10,
+    },
     toolsRow: {
         flexDirection: 'row',
         justifyContent: 'space-around',
         alignItems: 'center',
         paddingVertical: 12,
         paddingHorizontal: 8,
+        gap: 8,
     },
     toolBtn: {
         width: 46,
